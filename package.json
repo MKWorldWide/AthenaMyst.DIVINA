@@ -1,22 +1,30 @@
 {
   "name": "athenamyst-test",
   "version": "0.1.0",
-  "description": "Public Node.js/Express/React demo of Athena AI interface.",
+  "description": "Public Node.js/Express/React demo of Athena AI interface with analytics.",
   "main": "api/index.js",
   "scripts": {
     "start": "node api/index.js",
     "dev": "nodemon api/index.js",
-    "ui": "vite --config public/vite.config.js"
+    "build": "cd public && npm install && npm run build",
+    "build:frontend": "cd public && npm run build",
+    "install:all": "npm install && cd public && npm install",
+    "postinstall": "cd public && npm install"
   },
   "author": "AthenaMist Community",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
+    "cors": "^2.8.5",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "nodemon": "^2.0.22",
     "vite": "^4.4.9"
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
   }
 } 

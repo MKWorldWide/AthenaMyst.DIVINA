@@ -1,0 +1,31 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - npm ci
+    build:
+      commands:
+        - cd public
+        - npm run build
+  artifacts:
+    baseDirectory: public/dist
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
+      - public/node_modules/**/*
+backend:
+  phases:
+    build:
+      commands:
+        - npm ci
+        - echo "Backend build completed"
+  artifacts:
+    baseDirectory: api
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/* 

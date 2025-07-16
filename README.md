@@ -1,70 +1,231 @@
-# AthenaMyst-Test
+# AthenaMyst Test - Public AI Demo
 
-[![Public Test Deployment](https://img.shields.io/badge/deployment-public-green?style=for-the-badge)](https://github.com/MKWorldWide/AthenaMyst-Test)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
-[![Contributors](https://img.shields.io/github/contributors/MKWorldWide/AthenaMyst-Test?style=for-the-badge)](https://github.com/MKWorldWide/AthenaMyst-Test/graphs/contributors)
+A modern full-stack AI demo application built with React, Express, and Vite, designed for deployment on AWS Amplify with comprehensive analytics and data collection capabilities.
 
----
+## 🚀 Features
 
-## 🚀 AthenaMyst-Test: Public AI Interface Demo
+- **Modern React Frontend**: Beautiful, responsive UI with real-time AI interaction
+- **Express Backend API**: Robust server with analytics endpoints
+- **Data Collection**: Comprehensive user analytics and interaction tracking
+- **AWS Amplify Ready**: Optimized for seamless deployment
+- **Real-time Analytics**: Monitor user behavior and engagement
+- **Health Monitoring**: Built-in health checks and monitoring endpoints
 
-AthenaMyst-Test is a public, Node.js-based showcase of the Athena AI interface. It provides a safe, open API and UI for external collaborators, researchers, and supporters to interact with AthenaMyst’s architecture and contribute ideas—while safeguarding the divine core.
+## 📊 Analytics & Data Collection
 
-- **Node.js/Express API**: Mock AI endpoint for demo/testing
-- **React UI**: Minimal, public-friendly interface (no secrets, no trading logic)
-- **No privileged or internal code**: All sensitive logic is replaced with mocks or placeholders
+The application includes sophisticated analytics capabilities:
 
----
+- **User Session Tracking**: Unique session IDs and user journey mapping
+- **Interaction Analytics**: Track user prompts and responses
+- **Device Information**: Browser, platform, screen resolution, timezone
+- **Referrer Tracking**: Monitor traffic sources
+- **Real-time Dashboard**: View analytics at `/analytics` endpoint
 
-## 🧩 Project Structure
+## 🛠️ Tech Stack
+
+- **Frontend**: React 18, Vite, Modern CSS
+- **Backend**: Node.js, Express, CORS
+- **Deployment**: AWS Amplify
+- **Analytics**: Custom analytics engine with data collection
+
+## 📦 Installation
+
+### Local Development
+
+1. **Clone the repository**
+   ```bash
+   git clone <your-repo-url>
+   cd AthenaMyst_Test
+   ```
+
+2. **Install dependencies**
+   ```bash
+   npm run install:all
+   ```
+
+3. **Start development server**
+   ```bash
+   npm run dev
+   ```
+
+4. **Build for production**
+   ```bash
+   npm run build
+   ```
+
+## 🚀 AWS Amplify Deployment
+
+### Prerequisites
+
+- AWS Account with Amplify access
+- GitHub repository connected to Amplify
+- Node.js 16+ environment
+
+### Deployment Steps
+
+1. **Connect Repository**
+   - Go to AWS Amplify Console
+   - Click "New app" → "Host web app"
+   - Connect your GitHub repository
+   - Select the main branch
+
+2. **Build Settings**
+   - Amplify will auto-detect the build settings from `amplify.yml`
+   - The configuration handles both frontend and backend builds
+   - No additional configuration needed
+
+3. **Environment Variables** (Optional)
+   ```
+   NODE_ENV=production
+   PORT=8080
+   ```
+
+4. **Deploy**
+   - Click "Save and deploy"
+   - Amplify will build and deploy your application
+   - Your app will be available at the provided URL
+
+### Build Configuration
+
+The `amplify.yml` file handles:
+- Frontend build with Vite
+- Backend API setup
+- Static file serving
+- Proper artifact distribution
+
+## 📡 API Endpoints
+
+### Public Endpoints
+
+- `GET /` - Main application (React app)
+- `POST /ai` - AI interaction endpoint
+- `GET /health` - Health check
+- `POST /analytics` - Analytics data collection
+- `GET /analytics` - Analytics dashboard
+
+### Example API Usage
+
+```javascript
+// AI Interaction
+const response = await fetch('/ai', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ prompt: 'Hello, how are you?' })
+});
+
+// Analytics Collection
+await fetch('/analytics', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    type: 'user_interaction',
+    data: { action: 'button_click', timestamp: new Date().toISOString() }
+  })
+});
+```
+
+## 📊 Analytics Dashboard
+
+Access your analytics dashboard at `/analytics` to view:
+- Total page views
+- User interactions
+- Unique visitors
+- Recent activity
+- Device statistics
+
+## 🔧 Configuration
+
+### Environment Variables
+
+- `PORT`: Server port (default: 4000)
+- `NODE_ENV`: Environment (development/production)
+
+### Build Configuration
+
+The application uses a multi-stage build process:
+1. Frontend build with Vite
+2. Backend API setup
+3. Static file serving configuration
+
+## 📈 Monitoring & Analytics
+
+### Real-time Data Collection
+
+The application automatically collects:
+- User session data
+- Interaction patterns
+- Device information
+- Traffic sources
+- Response times
+
+### Analytics Storage
+
+Currently uses in-memory storage for demo purposes. For production:
+- Implement database storage (MongoDB, PostgreSQL)
+- Add data retention policies
+- Implement GDPR compliance
+- Add data export capabilities
+
+## 🔒 Security Considerations
+
+- CORS enabled for cross-origin requests
+- Input validation on all endpoints
+- Error handling and logging
+- No sensitive data exposure in demo version
+
+## 🚀 Performance Optimization
+
+- Vite for fast development and optimized builds
+- Static file serving for React app
+- Efficient API routing
+- Minimal dependencies
+
+## 📝 Development
+
+### Project Structure
 
 ```
-AthenaMyst-Test/
-├── api/                # Node.js Express API (mocked)
-├── public/             # Static React UI (demo only)
-├── README.md           # This file
-├── cursor.config.js    # Cursor repo config
-├── .gitignore          # Ignore private/internal files
-└── package.json        # Node.js project config
+AthenaMyst_Test/
+├── api/
+│   └── index.js          # Express backend
+├── public/
+│   ├── App.jsx           # React main component
+│   ├── App.css           # Styles
+│   ├── main.jsx          # React entry point
+│   ├── index.html        # HTML template
+│   ├── vite.config.js    # Vite configuration
+│   └── package.json      # Frontend dependencies
+├── amplify.yml           # Amplify build configuration
+├── package.json          # Main dependencies
+└── README.md            # This file
 ```
 
----
+### Adding Features
 
-## ✨ Public Test Deployment
+1. **Frontend**: Add components in `public/` directory
+2. **Backend**: Add routes in `api/index.js`
+3. **Analytics**: Extend analytics collection in `/analytics` endpoint
+4. **Styling**: Modify `public/App.css`
 
-- [Demo (if available)](https://athenamyst-test-demo.example.com)
-- [GitHub Repo](https://github.com/MKWorldWide/AthenaMyst-Test)
+## 🤝 Contributing
 
----
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
 
-## 🤝 Contributors
+## 📄 License
 
-- [Sunny Khandokar (Morpheus | Machine Dragon)](https://github.com/sunnyk)
-- [MKWorldWide](https://github.com/MKWorldWide)
-- [AthenaMist Community](https://github.com/MKWorldWide/AthenaMyst-Test/graphs/contributors)
+MIT License - see LICENSE file for details
 
----
+## 🆘 Support
 
-## 📜 License
-
-MIT License. See [LICENSE](LICENSE).
-
----
-
-## 🛡️ Security & Privacy
-
-This repository contains only public, non-privileged code. All secrets, internal models, and trading logic are excluded. For full AthenaMyst capabilities, see the private `athenamyst_host` repository (not public).
-
----
-
-## 🧪 Contributing & Testing
-
-- Fork, clone, and submit PRs for UI/API improvements, bugfixes, or ideas.
-- All code must be public-safe and free of secrets or privileged logic.
-- See `api/README.md` and `public/README.md` for more details.
+For issues and questions:
+- Check the analytics dashboard for system health
+- Review server logs for error details
+- Contact the development team
 
 ---
 
-## 🌐 About AthenaMyst
-
-AthenaMyst is a next-generation AI integration framework for trading, analytics, and research. This public repo is a safe, open gateway for the community to explore and contribute to Athena’s architecture. 
+**AthenaMyst Community** - Experience the future of AI interaction 
