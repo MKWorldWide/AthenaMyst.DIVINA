@@ -9,7 +9,7 @@
     "build": "cd public && npm install && npm run build",
     "build:frontend": "cd public && npm run build",
     "install:all": "npm install && cd public && npm install",
-    "postinstall": "cd public && npm install"
+    "prebuild": "cd public && npm install"
   },
   "author": "AthenaMist Community",
   "license": "MIT",

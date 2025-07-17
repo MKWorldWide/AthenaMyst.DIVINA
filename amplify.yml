@@ -3,11 +3,14 @@ frontend:
   phases:
     preBuild:
       commands:
-        - npm ci
+        - echo "Installing main dependencies...       - npm ci --only=production
+        - echoInstalling frontend dependencies..."
+        - cd public && npm ci --only=production
     build:
       commands:
-        - cd public
-        - npm run build
+        - echo Building frontend application..."
+        - cd public && npm run build
+        - echo "Frontend build completed successfully
   artifacts:
     baseDirectory: public/dist
     files:
@@ -20,8 +23,7 @@ backend:
   phases:
     build:
       commands:
-        - npm ci
-        - echo "Backend build completed"
+        - echo "Backend build completed - Express server ready
   artifacts:
     baseDirectory: api
     files:
