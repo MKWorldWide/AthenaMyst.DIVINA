@@ -1,7 +1,7 @@
 {
   "name": "athenamyst-test",
-  "version": "0.1.0",
-  "description": "Public Node.js/Express/React demo of Athena AI interface with analytics.",
+  "version": "2.0.0",
+  "description": "AthenaMyst Test v2.0 - Enhanced AI communication demo with multiple personas, mood-based responses, and advanced analytics.",
   "main": "api/index.js",
   "scripts": {
     "start": "node api/index.js",
@@ -26,5 +26,19 @@
   "engines": {
     "node": ">=16.0.0",
     "npm": ">=8.0.0"
+  },
+  "keywords": [
+    "ai",
+    "athenamyst",
+    "demo",
+    "communication",
+    "personas",
+    "analytics",
+    "react",
+    "express"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MKWorldWide/AthenaMyst_Test.git"
   }
 } 

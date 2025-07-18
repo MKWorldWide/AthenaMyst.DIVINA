@@ -6,6 +6,10 @@ function App() {
   const [response, setResponse] = useState('');
   const [loading, setLoading] = useState(false);
   const [userData, setUserData] = useState({});
+  const [persona, setPersona] = useState('athenamyst');
+  const [mood, setMood] = useState('neutral');
+  const [trust, setTrust] = useState(0.5);
+  const [systemStatus, setSystemStatus] = useState(null);
 
   // Collect user data on component mount
   useEffect(() => {
@@ -38,7 +42,20 @@ function App() {
     };
 
     collectUserData();
+    
+    // Check system status
+    checkSystemStatus();
   }, []);
+
+  const checkSystemStatus = async () => {
+    try {
+      const response = await fetch('/status');
+      const status = await response.json();
+      setSystemStatus(status);
+    } catch (error) {
+      console.error('Failed to get system status:', error);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -59,18 +76,27 @@ function App() {
             ...userData,
             action: 'ai_prompt',
             prompt: prompt,
+            persona,
+            mood,
+            trust,
             timestamp: new Date().toISOString(),
           }
         }),
       });
 
-      // Send AI request
+      // Send AI request with enhanced parameters
       const aiResponse = await fetch('/ai', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ 
+          prompt,
+          persona,
+          mood,
+          trust,
+          sessionId: userData.sessionId
+        }),
       });
 
       const result = await aiResponse.json();
@@ -83,19 +109,77 @@ function App() {
     }
   };
 
+  const personas = [
+    { id: 'athenamyst', name: 'AthenaMyst', description: 'General AI Assistant' },
+    { id: 'trader', name: 'Trader', description: 'Trading Analysis Mode' }
+  ];
+
+  const moods = [
+    { id: 'neutral', name: 'Neutral' },
+    { id: 'excited', name: 'Excited' },
+    { id: 'calm', name: 'Calm' },
+    { id: 'focused', name: 'Focused' }
+  ];
+
   return (
     <div className="App">
       <header className="App-header">
-        <h1>AthenaMyst AI Demo</h1>
-        <p>Experience the future of AI interaction</p>
+        <h1>AthenaMyst AI Demo v2.0</h1>
+        <p>Experience the future of AI interaction with enhanced communication patterns</p>
       </header>
       
       <main className="App-main">
+        <div className="controls-panel">
+          <div className="control-group">
+            <label htmlFor="persona">AI Persona:</label>
+            <select 
+              id="persona"
+              value={persona} 
+              onChange={(e) => setPersona(e.target.value)}
+              className="control-select"
+            >
+              {personas.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.name} - {p.description}
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          <div className="control-group">
+            <label htmlFor="mood">Mood:</label>
+            <select 
+              id="mood"
+              value={mood} 
+              onChange={(e) => setMood(e.target.value)}
+              className="control-select"
+            >
+              {moods.map(m => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          </div>
+          
+          <div className="control-group">
+            <label htmlFor="trust">Trust Level: {trust}</label>
+            <input
+              type="range"
+              id="trust"
+              min="0"
+              max="1"
+              step="0.1"
+              value={trust}
+              onChange={(e) => setTrust(parseFloat(e.target.value))}
+              className="control-range"
+            />
+          </div>
+        </div>
+
         <form onSubmit={handleSubmit} className="prompt-form">
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Ask AthenaMyst anything..."
+            placeholder={`Ask ${personas.find(p => p.id === persona)?.name || 'AthenaMyst'} anything...`}
             className="prompt-input"
             rows={4}
           />
@@ -104,30 +188,57 @@ function App() {
             disabled={loading || !prompt.trim()}
             className="submit-button"
           >
-            {loading ? 'Processing...' : 'Ask AthenaMyst'}
+            {loading ? 'Processing...' : `Ask ${personas.find(p => p.id === persona)?.name || 'AthenaMyst'}`}
           </button>
         </form>
 
         {response && (
           <div className="response-container">
-            <h3>AthenaMyst Response:</h3>
+            <h3>Response:</h3>
             <div className="response-text">{response}</div>
+            <div className="response-meta">
+              <span>Persona: {personas.find(p => p.id === persona)?.name}</span>
+              <span>Mood: {mood}</span>
+              <span>Trust: {trust}</span>
+            </div>
           </div>
         )}
 
         <div className="features">
-          <h3>Features:</h3>
+          <h3>Enhanced Features:</h3>
           <ul>
-            <li>✨ Real-time AI interaction</li>
-            <li>🔒 Secure data handling</li>
-            <li>📊 Advanced analytics</li>
-            <li>🚀 Lightning-fast responses</li>
+            <li>✨ Multiple AI Personas</li>
+            <li>🎭 Mood-based Responses</li>
+            <li>🔒 Trust Level Control</li>
+            <li>📊 Advanced Analytics</li>
+            <li>📝 Enhanced Logging</li>
+            <li>🚀 Real-time Communication</li>
           </ul>
         </div>
+
+        {systemStatus && (
+          <div className="system-status">
+            <h3>System Status:</h3>
+            <div className="status-grid">
+              <div className="status-item">
+                <strong>Uptime:</strong> {Math.round(systemStatus.system.uptime)}s
+              </div>
+              <div className="status-item">
+                <strong>Memory:</strong> {Math.round(systemStatus.system.memory.heapUsed / 1024 / 1024)}MB
+              </div>
+              <div className="status-item">
+                <strong>Users:</strong> {systemStatus.analytics.uniqueUsers}
+              </div>
+              <div className="status-item">
+                <strong>Interactions:</strong> {systemStatus.analytics.totalEntries}
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
       <footer className="App-footer">
-        <p>© 2024 AthenaMyst Community - Experience the future of AI</p>
+        <p>© 2024 AthenaMyst Community - Enhanced AI Communication v2.0</p>
       </footer>
     </div>
   );
