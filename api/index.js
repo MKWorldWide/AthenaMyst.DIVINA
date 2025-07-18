@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
+const axios = require('axios');
 
 const app = express();
 
@@ -71,6 +72,9 @@ app.post('/analytics', async (req, res) => {
       ip: analyticsEntry.ip,
       userAgent: analyticsEntry.userAgent.substring(0, 100)
     });
+
+    // Notify AthenaMist_Host
+    await notifyAthenaMistHost('analytics', analyticsEntry);
     
     res.json({ 
       success: true, 
@@ -164,6 +168,9 @@ app.post('/ai', async (req, res) => {
       persona,
       sessionId: req.body.sessionId || 'unknown'
     });
+
+    // Notify AthenaMist_Host
+    await notifyAthenaMistHost('ai_interaction', { prompt: sanitizedPrompt, response, mood, trust: trustLevel, persona, sessionId: req.body.sessionId || 'unknown' });
     
     res.json({
       result: response,
@@ -224,6 +231,42 @@ app.get('/status', async (req, res) => {
   } catch (error) {
     console.error('Status endpoint error:', error);
     res.status(500).json({ error: 'Failed to get system status' });
+  }
+});
+
+// AthenaMist_Host webhook endpoint (update this URL as needed)
+const ATHENAMIST_HOST_WEBHOOK = process.env.ATHENAMIST_HOST_WEBHOOK || 'http://localhost:3000/webhook/athenamyst-test';
+
+/**
+ * Notify AthenaMist_Host of an event
+ * @param {string} eventType
+ * @param {object} payload
+ */
+async function notifyAthenaMistHost(eventType, payload) {
+  try {
+    await axios.post(ATHENAMIST_HOST_WEBHOOK, {
+      event: eventType,
+      data: payload,
+      source: 'athenamyst-test',
+      timestamp: new Date().toISOString()
+    });
+    console.log(`🔗 Notified AthenaMist_Host: ${eventType}`);
+  } catch (error) {
+    console.error('❌ Failed to notify AthenaMist_Host:', error.message);
+  }
+}
+
+// Webhook endpoint to receive events/commands from AthenaMist_Host
+app.post('/webhook/athenamist', async (req, res) => {
+  try {
+    const { event, data } = req.body;
+    console.log(`📩 Received webhook from AthenaMist_Host: ${event}`);
+    // Handle specific events/commands here
+    // For now, just log and acknowledge
+    res.json({ success: true, received: event });
+  } catch (error) {
+    console.error('Webhook error:', error);
+    res.status(500).json({ error: 'Failed to process webhook' });
   }
 });
 
