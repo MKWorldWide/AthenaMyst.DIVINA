@@ -6,10 +6,9 @@
   "scripts": {
     "start": "node api/index.js",
     "dev": "nodemon api/index.js",
-    "build": "cd public && npm install && npm run build",
-    "build:frontend": "cd public && npm run build",
-    "install:all": "npm install && cd public && npm install",
-    "prebuild": "cd public && npm install"
+    "build": "vite build public",
+    "test": "jest",
+    "install:all": "npm install"
   },
   "author": "AthenaMist Community",
   "license": "MIT",
@@ -21,8 +20,14 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "jest": "^30.0.5",
     "nodemon": "^2.0.22",
+    "supertest": "^7.1.4",
     "vite": "^4.4.9"
+  },
+  "jest": {
+    "testEnvironment": "node"
   },
   "engines": {
     "node": ">=16.0.0",

@@ -6,10 +6,19 @@ const axios = require('axios');
 
 const app = express();
 
+// Hardened security: hide Express fingerprint
+// This mitigates trivial reconnaissance by removing the `X-Powered-By` header.
+app.disable('x-powered-by');
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public/dist')));
+
+// Lightweight input sanitizer to guard against basic XSS vectors
+// Trims length for abuse prevention and strips angle brackets.
+const sanitizeInput = (input = '') =>
+  String(input).replace(/[<>]/g, '').trim().slice(0, 1000);
 
 // Enhanced logging system
 const logDir = path.join(__dirname, 'logs');
@@ -52,11 +61,12 @@ const analyticsData = [];
 // Enhanced analytics endpoint for data collection
 app.post('/analytics', async (req, res) => {
   try {
-    const { type, data } = req.body;
+    const { type = 'event', data = {} } = req.body;
+    const sanitizedType = sanitizeInput(type).slice(0, 50);
     
     const analyticsEntry = {
       id: Date.now().toString(),
-      type,
+      type: sanitizedType,
       data,
       timestamp: new Date().toISOString(),
       ip: req.ip || req.connection.remoteAddress,
@@ -68,9 +78,9 @@ app.post('/analytics', async (req, res) => {
     // Enhanced logging
     await logInteraction('analytics', {
       ...data,
-      type,
+      type: sanitizedType,
       ip: analyticsEntry.ip,
-      userAgent: analyticsEntry.userAgent.substring(0, 100)
+      userAgent: (analyticsEntry.userAgent || '').substring(0, 100)
     });
 
     // Notify AthenaMist_Host
@@ -121,7 +131,7 @@ app.post('/ai', async (req, res) => {
     
     // Input validation and sanitization
     const trustLevel = Math.max(0, Math.min(1, parseFloat(trust) || 0.5));
-    const sanitizedPrompt = prompt.substring(0, 1000); // Limit prompt length
+    const sanitizedPrompt = sanitizeInput(prompt); // Enforce length + strip tags
     
     // Enhanced mock responses based on prompt content and mood
     let response = '';
@@ -259,11 +269,12 @@ async function notifyAthenaMistHost(eventType, payload) {
 // Webhook endpoint to receive events/commands from AthenaMist_Host
 app.post('/webhook/athenamist', async (req, res) => {
   try {
-    const { event, data } = req.body;
-    console.log(`📩 Received webhook from AthenaMist_Host: ${event}`);
+    const { event = 'unknown', data = {} } = req.body;
+    const safeEvent = sanitizeInput(event).slice(0, 100);
+    console.log(`📩 Received webhook from AthenaMist_Host: ${safeEvent}`);
     // Handle specific events/commands here
     // For now, just log and acknowledge
-    res.json({ success: true, received: event });
+    res.json({ success: true, received: safeEvent });
   } catch (error) {
     console.error('Webhook error:', error);
     res.status(500).json({ error: 'Failed to process webhook' });
@@ -286,11 +297,17 @@ app.use((error, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`🚀 AthenaMyst-Test API v2.0 running on port ${PORT}`);
-  console.log(`📊 Analytics endpoint: http://localhost:${PORT}/analytics`);
-  console.log(`🤖 AI endpoint: http://localhost:${PORT}/ai`);
-  console.log(`💚 Health check: http://localhost:${PORT}/health`);
-  console.log(`📈 System status: http://localhost:${PORT}/status`);
-  console.log(`📝 Logs directory: ${logDir}`);
-});
+
+// Allow the app to be imported for testing without immediately starting the server
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`🚀 AthenaMyst-Test API v2.0 running on port ${PORT}`);
+    console.log(`📊 Analytics endpoint: http://localhost:${PORT}/analytics`);
+    console.log(`🤖 AI endpoint: http://localhost:${PORT}/ai`);
+    console.log(`💚 Health check: http://localhost:${PORT}/health`);
+    console.log(`📈 System status: http://localhost:${PORT}/status`);
+    console.log(`📝 Logs directory: ${logDir}`);
+  });
+}
+
+module.exports = app;

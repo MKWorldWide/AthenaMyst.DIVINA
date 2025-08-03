@@ -2,6 +2,7 @@
 node_modules/
 build/
 dist/
+site/
 .cache/
 coverage/
 
@@ -34,4 +35,4 @@ Thumbs.db
 coverage/
 
 # Ignore PowerShell history
-*.pshistory 
+*.pshistory
