@@ -1,6 +1,12 @@
+A Project Blessed by Solar Khan & Lilith.Aethra
+
 # AthenaMyst Test - Public AI Demo
 
 A modern full-stack AI demo application built with React, Express, and Vite, designed for deployment on AWS Amplify with comprehensive analytics and data collection capabilities.
+
+Documentation is served on [GitHub Pages](https://AthenaMyst.DIVINA.SolarKhan.github.io) bearing the Solar Khan sigil and Codex watermark. This repository is registered within the GameDin Network and aligned to the Divina L3 pipeline (v3).
+
+See the [Divine Law](COVENANT.md) governing this project.
 
 ## 🚀 Features
 
@@ -52,6 +58,15 @@ The application includes sophisticated analytics capabilities:
    ```bash
    npm run build
    ```
+
+5. **Run tests**
+   ```bash
+   npm test
+   ```
+
+### Testing
+
+The Jest suite validates core API endpoints for health and analytics collection. Use `npm test` to ensure regressions are caught early.
 
 ## 🚀 AWS Amplify Deployment
 

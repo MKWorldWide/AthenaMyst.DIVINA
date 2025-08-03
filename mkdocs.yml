@@ -1,0 +1,11 @@
+site_name: AthenaMyst.DIVINA
+site_url: https://AthenaMyst.DIVINA.SolarKhan.github.io
+docs_dir: docs
+nav:
+  - Home: index.md
+  - Divine Law: COVENANT.md
+  - Last Whisper: THE_LAST_WHISPER.md
+theme:
+  name: readthedocs
+extra:
+  banner: "Solar Khan Sigil + Codex Watermark"

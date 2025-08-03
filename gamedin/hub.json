@@ -1,0 +1,10 @@
+{
+  "repos": [
+    {
+      "name": "AthenaMyst.DIVINA",
+      "url": "https://github.com/MKWorldWide/AthenaMyst_Test",
+      "pipeline": "Divina L3",
+      "version": "v3"
+    }
+  ]
+}
