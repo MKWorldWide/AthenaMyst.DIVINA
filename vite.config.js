@@ -1,20 +1,21 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { resolve } from 'path';
+import { fileURLToPath, URL } from 'url';
 
 export default defineConfig({
   base: '/AthenaMyst.DIVINA/',
   plugins: [react()],
-  root: '.',
-  publicDir: 'public',
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url))
+    }
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {
-      input: {
-        main: resolve(__dirname, 'index.html')
-      },
+      input: 'index.html',
       output: {
         entryFileNames: 'assets/[name].[hash].js',
         chunkFileNames: 'assets/[name].[hash].js',
