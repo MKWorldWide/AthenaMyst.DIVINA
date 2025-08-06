@@ -76,7 +76,7 @@ The Jest suite validates core API endpoints for health and analytics collection.
 - GitHub repository connected to Amplify
 - Node.js 16+ environment
 
-### Deployment Steps
+#### Deployment Steps
 
 1. **Connect Repository**
    - Go to AWS Amplify Console

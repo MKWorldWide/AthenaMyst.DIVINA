@@ -3,10 +3,12 @@
   "version": "2.0.0",
   "description": "AthenaMyst Test v2.0 - Enhanced AI communication demo with multiple personas, mood-based responses, and advanced analytics.",
   "main": "api/index.js",
+  "homepage": "https://mkworldwide.github.io/AthenaMyst.DIVINA",
   "scripts": {
     "start": "node api/index.js",
     "dev": "nodemon api/index.js",
-    "build": "vite build public",
+    "build": "vite build",
+    "preview": "vite preview --port 4173",
     "test": "jest",
     "install:all": "npm install"
   },
