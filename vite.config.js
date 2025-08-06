@@ -4,7 +4,8 @@ import { fileURLToPath, URL } from 'url';
 
 export default defineConfig(({ command, mode }) => {
   const isProd = mode === 'production';
-  const base = isProd ? '/AthenaMyst.DIVINA/' : '/';
+  // Use relative paths for GitHub Pages
+  const base = isProd ? './' : '/';
 
   return {
     base,
