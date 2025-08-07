@@ -9,24 +9,42 @@
     "dev": "nodemon api/index.js",
     "build": "vite build",
     "preview": "vite preview --port 4173",
-    "test": "jest",
-    "install:all": "npm install"
+    "test": "mocha -r ts-node/register test/**/*.test.ts --timeout 10000",
+    "test:divina": "mocha -r ts-node/register test/divina/*.test.ts --timeout 10000",
+    "test:trading": "mocha -r ts-node/register test/trading/*.test.ts --timeout 10000",
+    "test:watch": "nodemon --exec \"npm run test:trading\" --watch src --watch test --ext ts,json",
+    "install:all": "npm install",
+    "tsc": "tsc"
   },
   "author": "AthenaMist Community",
   "license": "MIT",
   "dependencies": {
+    "@types/uuid": "^10.0.0",
     "axios": "^1.10.0",
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
+    "@types/chai": "^5.2.2",
+    "@types/jest": "^29.5.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^24.2.0",
+    "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.7.0",
+    "chai": "^5.2.1",
+    "cross-env": "^10.0.0",
+    "dotenv": "^17.2.1",
     "jest": "^30.0.5",
+    "mocha": "^11.7.1",
     "nodemon": "^2.0.22",
     "supertest": "^7.1.4",
-    "vite": "^4.4.9"
+    "ts-mocha": "^11.1.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.10"
   },
   "jest": {
     "testEnvironment": "node"
