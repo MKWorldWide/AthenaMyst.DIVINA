@@ -140,19 +140,33 @@ class OandaTradingEngine:
             # Calculate position size in account currency
             position_value = (risk_amount * 100000) / pips_risk
             
-            # Convert to units
-            units = (position_value / entry_price) * 100000  # Convert to standard lots (100,000 units per lot)
+            # Convert to units (1 standard lot = 100,000 units)
+            units = (position_value / entry_price) * 100000
+            
+            # Get maximum allowed position size from OANDA
+            max_units = self.get_max_position_size()
+            
+            # Ensure we don't exceed maximum position size
+            if max_units > 0:
+                units = min(units, max_units)
+            
+            # Ensure we don't exceed available margin (safety check)
+            margin_required = (units * entry_price) / 50  # 50:1 leverage
+            if margin_required > self.margin_available:
+                units = (self.margin_available * 50) / entry_price
             
             # Round to nearest 1000 units (OANDA requirement)
             units = round(units / 1000) * 1000
             
-            # Get maximum allowed position size from OANDA
-            max_units = self.get_max_position_size()
-            if max_units > 0:
-                units = min(units, max_units)
-                position_value = (units * entry_price) / 100000  # Recalculate position value based on capped units
+            # Recalculate position value based on final units
+            position_value = (units * entry_price) / 100000
+            
+            # Final safety check to ensure we don't exceed max units
+            units = min(units, max_units) if max_units > 0 else units
             
             logger.info(f"Position size: {units:,} units (${position_value:,.2f} at {entry_price:.5f})")
+            logger.info(f"Risk: {self.risk_percent*100:.1f}% of ${self.account_balance:,.2f} = ${risk_amount:,.2f}")
+            
             return units, position_value
             
         except Exception as e:
@@ -160,15 +174,51 @@ class OandaTradingEngine:
             return 0.0, 0.0
             
     def get_max_position_size(self) -> float:
-        """Get the maximum position size allowed by OANDA."""
-        # OANDA typically has a maximum position size of 10,000,000 units for major pairs
-        # This can be adjusted based on account type and instrument
-        max_units = 10_000_000  # Default max units for major pairs
+        """
+        Get the maximum position size allowed by OANDA based on account type and instrument.
         
-        # Adjust for minor pairs if needed
-        if 'JPY' in self.trading_pair:
-            max_units = 10_000_000  # Adjust for JPY pairs if needed
-            
+        Returns:
+            float: Maximum number of units allowed for a single position
+        """
+        # OANDA standard position size limits (in units)
+        limits = {
+            'standard': {
+                'majors': 10_000_000,     # EUR/USD, GBP/USD, etc.
+                'minors': 5_000_000,      # EUR/GBP, AUD/CAD, etc.
+                'exotics': 1_000_000,     # USD/MXN, USD/TRY, etc.
+                'jpy_pairs': 10_000_000,  # USD/JPY, EUR/JPY, etc.
+            },
+            'premium': {
+                'majors': 50_000_000,
+                'minors': 25_000_000,
+                'exotics': 5_000_000,
+                'jpy_pairs': 50_000_000,
+            }
+        }
+        
+        # Determine account type (standard or premium)
+        account_type = 'premium' if self.account_type.lower() == 'live' else 'standard'
+        
+        # Categorize the trading pair
+        majors = ['EUR_USD', 'GBP_USD', 'USD_CHF', 'AUD_USD', 'NZD_USD', 'USD_CAD']
+        jpy_pairs = ['USD_JPY', 'EUR_JPY', 'GBP_JPY', 'AUD_JPY', 'CAD_JPY', 'CHF_JPY']
+        
+        if self.trading_pair in majors:
+            pair_type = 'majors'
+        elif self.trading_pair in jpy_pairs:
+            pair_type = 'jpy_pairs'
+        elif any(c in self.trading_pair for c in ['MXN', 'TRY', 'ZAR', 'NOK', 'SEK', 'HKD', 'SGD']):
+            pair_type = 'exotics'
+        else:
+            pair_type = 'minors'
+        
+        # Get the maximum units allowed
+        max_units = limits[account_type][pair_type]
+        
+        # Additional safety margin (90% of limit to be safe)
+        max_units = int(max_units * 0.9)
+        
+        logger.info(f"Max position size for {self.trading_pair} ({pair_type}): {max_units:,} units")
         return max_units
     
     async def get_current_price(self) -> float:
