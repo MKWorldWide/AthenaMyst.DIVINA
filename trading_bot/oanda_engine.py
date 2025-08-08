@@ -101,18 +101,29 @@ class OandaTradingEngine:
     
     def get_position_size(self, entry_price: float, stop_loss_price: float) -> Tuple[float, float]:
         """
-        Calculate position size based on 10% of account balance and stop loss.
+        Calculate position size based on 10% of account balance, stop loss, and available margin.
         
+        Args:
+            entry_price: Entry price for the trade
+            stop_loss_price: Stop loss price for the trade
+            
         Returns:
             Tuple[units, position_value] - Number of units to trade and their value in account currency
         """
         try:
-            # Get current account balance if not already set
+            # Get current account balance and margin available
+            asyncio.run(self.get_account_balance())
+            
             if self.account_balance <= 0:
-                asyncio.create_task(self.get_account_balance())
+                logger.error("Invalid account balance")
+                return 0.0, 0.0
                 
             # Calculate risk amount (10% of account balance)
-            risk_amount = self.account_balance * self.risk_percent
+            risk_amount = min(self.account_balance * self.risk_percent, self.margin_available)
+            
+            if risk_amount <= 0:
+                logger.error(f"Insufficient margin available. Margin: {self.margin_available}")
+                return 0.0, 0.0
             
             # Calculate pip value (assuming standard lot size of 100,000 units)
             # For pairs where USD is the quote currency, 1 pip = 0.0001
@@ -126,18 +137,39 @@ class OandaTradingEngine:
                 logger.warning("Stop loss is too close to entry price")
                 return 0.0, 0.0
                 
-            # Calculate position size in units
+            # Calculate position size in account currency
             position_value = (risk_amount * 100000) / pips_risk
             
-            # Convert to standard lot size (1000 units for micro lots)
-            units = round(position_value / 1000) * 1000
+            # Convert to units
+            units = (position_value / entry_price) * 100000  # Convert to standard lots (100,000 units per lot)
             
-            logger.info(f"Position size: {units} units (${position_value:.2f} at {entry_price})")
+            # Round to nearest 1000 units (OANDA requirement)
+            units = round(units / 1000) * 1000
+            
+            # Get maximum allowed position size from OANDA
+            max_units = self.get_max_position_size()
+            if max_units > 0:
+                units = min(units, max_units)
+                position_value = (units * entry_price) / 100000  # Recalculate position value based on capped units
+            
+            logger.info(f"Position size: {units:,} units (${position_value:,.2f} at {entry_price:.5f})")
             return units, position_value
             
         except Exception as e:
-            logger.error(f"Error calculating position size: {e}")
+            logger.error(f"Error calculating position size: {e}", exc_info=True)
             return 0.0, 0.0
+            
+    def get_max_position_size(self) -> float:
+        """Get the maximum position size allowed by OANDA."""
+        # OANDA typically has a maximum position size of 10,000,000 units for major pairs
+        # This can be adjusted based on account type and instrument
+        max_units = 10_000_000  # Default max units for major pairs
+        
+        # Adjust for minor pairs if needed
+        if 'JPY' in self.trading_pair:
+            max_units = 10_000_000  # Adjust for JPY pairs if needed
+            
+        return max_units
     
     async def get_current_price(self) -> float:
         """Get the current price of the trading pair."""
