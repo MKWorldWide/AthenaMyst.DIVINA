@@ -290,7 +290,7 @@ class OandaTradingEngine:
     
     async def place_trade(self, direction: str, entry_price: float = None, reason: str = None) -> Optional[Dict]:
         """
-        Place a trade with 10% position sizing and proper risk management.
+        Place a trade with proper position sizing and risk management.
         
         Args:
             direction: 'buy' or 'sell'
@@ -301,6 +301,22 @@ class OandaTradingEngine:
             Trade details or None if failed
         """
         try:
+            # Get the latest account balance and margin information
+            account_balance = await self.get_account_balance()
+            if account_balance <= 0:
+                error_msg = "Invalid account balance. Cannot place trade."
+                logger.error(error_msg)
+                if self.discord_webhook:
+                    self.discord_webhook.send_error(error_msg)
+                return None
+                
+            # Log current account status
+            logger.info(
+                f"Account Status - Balance: {self.account_balance:.2f} {self.account_currency}, "
+                f"Margin Available: {self.margin_available:.2f}, "
+                f"Unrealized P&L: {self.unrealized_pnl:.2f}"
+            )
+            
             # Get current price if not provided
             current_price = await self.get_current_price()
             if current_price is None:
@@ -436,38 +452,82 @@ class OandaTradingEngine:
             return None
             
     async def calculate_position_size(self, entry_price: float, stop_loss_price: float) -> float:
-        """Calculate position size based on 10% account risk."""
+        """
+        Calculate position size starting from 250 units and scaling with account size.
+        Always uses the latest account balance and includes safety checks.
+        
+        Args:
+            entry_price: Entry price for the trade
+            stop_loss_price: Stop loss price for the trade
+            
+        Returns:
+            float: Number of units to trade, or 0 if invalid
+        """
         try:
-            # Get account balance
-            await self.get_account_balance()
-            if self.account_balance <= 0:
-                logger.error(f"Invalid account balance: {self.account_balance}")
+            # Always get the latest account balance and margin information
+            current_balance = await self.get_account_balance()
+            
+            # Validate account balance
+            if current_balance <= 0:
+                logger.error(f"Invalid account balance: {current_balance:.2f}")
                 return 0.0
                 
-            # Calculate risk amount (10% of account balance)
-            risk_amount = self.account_balance * self.risk_percent
+            # Log current account status for debugging
+            logger.info(
+                f"Position Sizing - Balance: {self.account_balance:.2f} {self.account_currency}, "
+                f"Margin Available: {self.margin_available:.2f}, "
+                f"Unrealized P&L: {self.unrealized_pnl:.2f}"
+            )
             
-            # Calculate position size
-            if 'JPY' in self.trading_pair:
-                pip_value = 0.01  # For JPY pairs
-            else:
-                pip_value = 0.0001  # For other currency pairs
+            # Base position size (starting point)
+            base_units = 250.0
+            
+            # Scale position size based on account balance
+            # For every $1000 in account balance, add 100 units
+            balance_scaling = max(1.0, current_balance / 1000.0)
+            scaled_units = base_units * balance_scaling
+            
+            # Ensure position size is a multiple of 1000 (OANDA requirement)
+            units = round(scaled_units / 1000) * 1000
+            
+            # Ensure minimum position size of 250 units
+            units = max(units, 250)
+            
+            # Calculate required margin and check against available margin
+            margin_required = (units * entry_price) / 50  # Assuming 50:1 leverage
+            
+            # Add a safety buffer (use only 80% of available margin)
+            safe_margin_available = self.margin_available * 0.8
+            
+            if margin_required > safe_margin_available:
+                # Recalculate units based on safe margin
+                units = int((safe_margin_available * 50) / entry_price)
+                units = max(units, 250)  # Maintain minimum size
+                logger.info(f"Adjusted position size for margin safety: {units} units")
+            
+            # Get maximum allowed position size
+            max_units = self.get_max_position_size()
+            if max_units > 0:
+                units = min(units, max_units)
                 
-            risk_per_unit = abs(entry_price - stop_loss_price)
-            if risk_per_unit <= 0:
-                logger.error(f"Invalid risk per unit: {risk_per_unit}")
+                if units < 250:
+                    logger.warning("Calculated position size is below minimum (250 units)")
+                    return 0.0
+            
+            # Final validation
+            if units <= 0:
+                logger.error(f"Invalid position size calculated: {units}")
                 return 0.0
                 
-            position_value = (risk_amount / risk_per_unit) * entry_price
-            
-            # Convert to units (standard lot = 100,000 units)
-            units = (position_value / entry_price) * 100000
-            
-            # Round to nearest 1000 units (OANDA requirement)
-            units = round(units / 1000) * 1000
-            
-            logger.info(f"Position size: {units} units (${position_value:.2f} at {entry_price:.5f})")
-            return units
+            # Log the position size calculation
+            position_value = (units * entry_price) / 100000  # Position value in lots
+            logger.info(
+                f"Position Size - Units: {units:,}, "
+                f"Value: {position_value:.2f} lots, "
+                f"Margin Req: ${(units * entry_price) / 50:,.2f}"
+            )
+                
+            return float(units)
             
         except Exception as e:
             logger.error(f"Error calculating position size: {e}", exc_info=True)
