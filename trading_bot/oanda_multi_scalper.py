@@ -67,7 +67,6 @@ class OandaMultiScalper:
             
             # Initialize engine
             self.engines[pair] = OandaTradingEngine(
-                trading_pair=pair, 
                 config_file=config_filename,
                 discord_webhook_url=self.discord_webhook_url
             )

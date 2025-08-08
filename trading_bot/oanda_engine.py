@@ -10,7 +10,7 @@ from oandapyV20 import API
 from oandapyV20.exceptions import V20Error
 from oandapyV20.contrib.requests import MarketOrderRequest, TakeProfitDetails, StopLossDetails
 from oandapyV20.contrib.factories import InstrumentsCandlesFactory
-from oandapyV20.endpoints.accounts import AccountDetails, AccountSummary
+from oandapyV20.endpoints.accounts import AccountDetails, AccountSummary, AccountInstruments
 from oandapyV20.endpoints.positions import OpenPositions, PositionDetails
 from oandapyV20.endpoints.trades import OpenTrades, TradeDetails
 from oandapyV20.endpoints.orders import OrderCreate, OrderCancel, OrderDetails
@@ -139,29 +139,31 @@ class OandaTradingEngine:
             logger.error(f"Error calculating position size: {e}")
             return 0.0, 0.0
     
-    async def get_current_price(self) -> Optional[float]:
-        """Get the current bid price for the trading pair."""
+    async def get_current_price(self) -> float:
+        """Get the current price of the trading pair."""
         try:
-            params = {"instruments": self.trading_pair}
-            r = accounts.AccountInstruments(accountID=self.account_id, params=params)
+            from oandapyV20.endpoints.pricing import PricingInfo
+            
+            params = {
+                'instruments': self.trading_pair
+            }
+            
+            # Get the pricing information
+            r = PricingInfo(accountID=self.account_id, params=params)
             response = self.client.request(r)
             
-            if 'instruments' in response and len(response['instruments']) > 0:
-                # Get the latest candle for the instrument
-                instrument = response['instruments'][0]
-                
-                # Get the latest price using the pricing endpoint
-                from oandapyV20.endpoints.pricing import PricingInfo
-                r = PricingInfo(accountID=self.account_id, params={"instruments": self.trading_pair})
-                response = self.client.request(r)
-                
-                if 'prices' in response and len(response['prices']) > 0:
-                    price_data = response['prices'][0]
-                    if 'bids' in price_data and len(price_data['bids']) > 0:
-                        return float(price_data['bids'][0]['price'])
+            # Extract the bid price
+            if 'prices' in response and len(response['prices']) > 0:
+                price_data = response['prices'][0]
+                if 'bids' in price_data and len(price_data['bids']) > 0:
+                    return float(price_data['bids'][0]['price'])
             
-            logger.warning("Could not get current price")
-            return None
+            logger.warning("No price data available in response")
+            raise ValueError("No price data available in response")
+            
+        except Exception as e:
+            logger.error(f"Error getting current price: {e}")
+            raise
             
         except V20Error as e:
             logger.error(f"Error getting current price: {e}")
