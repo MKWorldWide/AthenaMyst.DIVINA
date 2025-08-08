@@ -36,16 +36,35 @@ class OandaTradingEngine:
     
     def __init__(self, config_file: str = '.env.oanda', discord_webhook_url: str = None):
         # Load configuration
+        if not os.path.isfile(config_file):
+            logger.error(f"Configuration file not found: {config_file}")
+            raise FileNotFoundError(f"Configuration file not found: {config_file}")
+            
         load_dotenv(config_file)
         
-        # Initialize OANDA API client
+        # Initialize OANDA API client with validation
         self.account_id = os.getenv('OANDA_ACCOUNT_ID')
         self.api_key = os.getenv('OANDA_API_KEY')
-        self.account_type = os.getenv('OANDA_ACCOUNT_TYPE', 'practice')
+        self.account_type = os.getenv('OANDA_ACCOUNT_TYPE', 'practice').lower()
         
+        # Validate required configuration
+        if not self.account_id:
+            raise ValueError("OANDA_ACCOUNT_ID is not set in the configuration file")
+        if not self.api_key:
+            raise ValueError("OANDA_API_KEY is not set in the configuration file")
+            
         # Set the correct environment URL based on account type
-        environment = 'live' if self.account_type.lower() == 'live' else 'practice'
-        self.client = API(access_token=self.api_key, environment=environment)
+        if self.account_type not in ['practice', 'live']:
+            logger.warning(f"Invalid OANDA_ACCOUNT_TYPE: {self.account_type}. Defaulting to 'practice'")
+            self.account_type = 'practice'
+            
+        # Initialize the OANDA API client with the correct environment
+        try:
+            self.client = API(access_token=self.api_key, environment=self.account_type)
+            logger.info(f"Initialized OANDA API client for {self.account_type.upper()} environment")
+        except Exception as e:
+            logger.error(f"Failed to initialize OANDA API client: {str(e)}")
+            raise
         
         logger.info(f"Initialized OANDA client for account: {self.account_id} ({environment})")
         
@@ -75,29 +94,61 @@ class OandaTradingEngine:
         logger.info(f"Initialized OANDA Trading Engine for {self.trading_pair}")
     
     async def get_account_balance(self) -> float:
-        """Get the current account balance."""
-        try:
-            # Get account details
-            r = AccountDetails(accountID=self.account_id)
-            response = self.client.request(r)
-            
-            # Update account metrics
-            account = response.get('account', {})
-            self.account_balance = float(account.get('balance', 0.0))
-            self.unrealized_pnl = float(account.get('unrealizedPL', 0.0))
-            self.margin_available = float(account.get('marginAvailable', 0.0))
-            
-            logger.debug(f"Account balance updated: {self.account_balance} {self.account_currency}")
-            return self.account_balance
-            
-        except V20Error as e:
-            logger.error(f"Error getting account balance: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"API Response: {e.response.text}")
-            return 0.0
-        except Exception as e:
-            logger.error(f"Unexpected error in get_account_balance: {e}")
-            return 0.0
+        """Get the current account balance with improved error handling and validation."""
+        max_retries = 3
+        retry_delay = 1  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                # Get account details
+                r = AccountDetails(accountID=self.account_id)
+                response = self.client.request(r)
+                
+                if not response or 'account' not in response:
+                    raise ValueError("Invalid response from OANDA API")
+                
+                # Update account metrics
+                account = response.get('account', {})
+                self.account_balance = float(account.get('balance', 0.0))
+                self.unrealized_pnl = float(account.get('unrealizedPL', 0.0))
+                self.margin_available = float(account.get('marginAvailable', 0.0))
+                
+                # Log account information
+                logger.info(f"Account: {self.account_id}")
+                logger.info(f"Balance: {self.account_balance} {self.account_currency}")
+                logger.info(f"Unrealized P/L: {self.unrealized_pnl} {self.account_currency}")
+                logger.info(f"Margin Available: {self.margin_available} {self.account_currency}")
+                
+                return self.account_balance
+                
+            except V20Error as e:
+                error_msg = str(e)
+                logger.error(f"Attempt {attempt + 1}/{max_retries} - Error getting account balance: {error_msg}")
+                
+                # Check if this is a rate limit error
+                if '429' in error_msg and attempt < max_retries - 1:
+                    logger.warning(f"Rate limited. Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                    
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.error(f"API Response: {e.response.text}")
+                
+                if attempt == max_retries - 1:  # Last attempt
+                    logger.error("Max retries reached. Could not get account balance.")
+                    return 0.0
+                    
+            except Exception as e:
+                logger.error(f"Unexpected error in get_account_balance: {str(e)}")
+                logger.exception("Full traceback:")
+                if attempt == max_retries - 1:  # Last attempt
+                    return 0.0
+                    
+            # Small delay before next retry
+            await asyncio.sleep(1)
+        
+        return 0.0
     
     def get_position_size(self, entry_price: float, stop_loss_price: float) -> Tuple[float, float]:
         """
