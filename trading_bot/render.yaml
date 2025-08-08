@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: oanda-trading-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python oanda_multi_scalper.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: OANDA_ACCOUNT_ID
+        fromDatabase:
+          name: oanda-credentials
+          property: account_id
+      - key: OANDA_API_KEY
+        fromDatabase:
+          name: oanda-credentials
+          property: api_key
+      - key: DISCORD_WEBHOOK_URL
+        fromDatabase:
+          name: discord-webhook
+          property: url
+    plan: free
