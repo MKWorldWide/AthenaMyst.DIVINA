@@ -382,52 +382,56 @@ class OandaTradingEngine:
                 
             logger.info(trade_info)
             
-            # Send Discord notification
-            if self.discord_webhook:
-                self.discord_webhook.send_trade_opened(
-                    pair=self.trading_pair,
-                    direction=direction,
-                    entry_price=entry_price,
-                    stop_loss=stop_loss_price,
-                    take_profit=take_profit_price,
-                    units=abs(units)
-                )
-            
             # Place the order
-            r = OrderCreate(accountID=self.account_id, data=order_data)
-            response = self.client.request(r)
-            
-            if 'orderFillTransaction' in response:
-                logger.info(f"Successfully placed {direction.upper()} order")
-                logger.debug(f"Order response: {response}")
+            try:
+                r = OrderCreate(accountID=self.account_id, data=order_data)
+                response = self.client.request(r)
+                logger.debug(f"OANDA API Response: {response}")
                 
-                # Get the trade ID if available
-                trade_id = None
-                if 'tradeOpened' in response.get('orderFillTransaction', {}):
-                    trade_id = response['orderFillTransaction']['tradeOpened'].get('tradeID')
+                if 'orderFillTransaction' in response:
+                    logger.info(f"Successfully placed {direction.upper()} order")
+                    
+                    # Get the trade ID if available
+                    trade_id = None
+                    if 'tradeOpened' in response.get('orderFillTransaction', {}):
+                        trade_id = response['orderFillTransaction']['tradeOpened'].get('tradeID')
+                    
+                    # Send success notification to Discord
+                    if self.discord_webhook:
+                        self.discord_webhook.send_trade_opened(
+                            pair=self.trading_pair,
+                            direction=direction,
+                            entry_price=entry_price,
+                            stop_loss=stop_loss_price,
+                            take_profit=take_profit_price,
+                            units=abs(units)
+                        )
+                    
+                    logger.info(f"Trade executed successfully. Trade ID: {trade_id}")
+                    return {
+                        'id': trade_id,
+                        'instrument': self.trading_pair,
+                        'direction': direction,
+                        'units': abs(units),
+                        'entry_price': entry_price,
+                        'stop_loss': stop_loss_price,
+                        'take_profit': take_profit_price,
+                        'timestamp': datetime.utcnow().isoformat(),
+                        'raw_response': response
+                    }
                 
-                trade_details = {
-                    'id': trade_id,
-                    'instrument': self.trading_pair,
-                    'direction': direction,
-                    'units': abs(units),
-                    'entry_price': entry_price,
-                    'stop_loss': stop_loss_price,
-                    'take_profit': take_profit_price,
-                    'timestamp': datetime.utcnow().isoformat(),
-                    'raw_response': response
-                }
+            except V20Error as e:
+                error_msg = f"OANDA API Error: {e}"
+                if hasattr(e, 'response') and e.response is not None:
+                    error_msg += f"\nAPI Response: {e.response.text}"
+                    logger.error(f"OANDA API Error Response: {e.response.text}")
                 
-                # Store active trade
-                if trade_id:
-                    self.active_trades[trade_id] = trade_details
+                logger.error(error_msg, exc_info=True)
                 
-                return trade_details
-            else:
-                error_msg = f"Failed to place order: {response}"
-                logger.error(error_msg)
+                # Send error notification to Discord
                 if self.discord_webhook:
-                    self.discord_webhook.send_error(error_msg)
+                    self.discord_webhook.send_error(f"Failed to place order: {error_msg}")
+                
                 return None
             
         except V20Error as e:
