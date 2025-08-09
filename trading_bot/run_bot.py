@@ -17,27 +17,59 @@ from typing import Optional
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from trading_bot.trading_loop import run_kraken, run_binanceus
+from trading_loop import run_kraken, run_binanceus
 
-def setup_logging() -> None:
-    """Configure logging for the application."""
+def setup_logging(exchange: str = None) -> logging.Logger:
+    """
+    Configure logging for the application.
+    
+    Args:
+        exchange: Exchange name (e.g., 'kraken', 'binanceus') or None for main logger
+        
+    Returns:
+        Configured logger instance
+    """
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     
-    logging.basicConfig(
-        level=log_level,
-        format=log_format,
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(os.getenv("LOG_FILE", "trading_bot.log"),
-                             encoding='utf-8')
-        ]
-    )
+    # Create logs directory if it doesn't exist
+    logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Create a logger specific to the exchange or use the root logger
+    if exchange:
+        logger = logging.getLogger(f"trading_bot.{exchange}")
+        log_file = os.path.join(logs_dir, f"{exchange}.log")
+    else:
+        logger = logging.getLogger()
+        log_file = os.path.join(logs_dir, "trading_bot.log")
+    
+    # Clear any existing handlers
+    if logger.hasHandlers():
+        logger.handlers.clear()
+    
+    # Set log level
+    logger.setLevel(log_level)
+    
+    # Create formatter
+    formatter = logging.Formatter(log_format)
+    
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    # File handler
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
     
     # Suppress noisy loggers
     logging.getLogger("ccxt").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("asyncio").setLevel(logging.WARNING)
+    
+    return logger
 
 def check_environment() -> bool:
     """Check that required environment variables are set."""
@@ -74,8 +106,9 @@ def main() -> None:
     if not check_environment():
         sys.exit(1)
     
-    setup_logging()
-    logger = logging.getLogger(__name__)
+    # Setup main logger
+    logger = setup_logging()
+    logger.info("Trading bot starting...")
     
     try:
         if args.all:
@@ -86,10 +119,12 @@ def main() -> None:
             
             # Start Kraken thread
             if os.getenv("KRAKEN_API_KEY") and os.getenv("KRAKEN_API_SECRET"):
+                kraken_logger = setup_logging("kraken")
                 kraken_thread = threading.Thread(
                     target=run_kraken,
                     name="KrakenTradingLoop",
-                    daemon=True
+                    daemon=True,
+                    kwargs={"logger": kraken_logger}
                 )
                 threads.append(kraken_thread)
                 kraken_thread.start()
@@ -97,10 +132,12 @@ def main() -> None:
             
             # Start Binance.US thread
             if os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET"):
+                binance_logger = setup_logging("binanceus")
                 binance_thread = threading.Thread(
                     target=run_binanceus,
                     name="BinanceUSTradingLoop",
-                    daemon=True
+                    daemon=True,
+                    kwargs={"logger": binance_logger}
                 )
                 threads.append(binance_thread)
                 binance_thread.start()
@@ -119,12 +156,13 @@ def main() -> None:
                 # Threads are daemon threads, so they'll exit when main does
                 
         else:  # Single exchange mode
+            exchange_logger = setup_logging(args.exchange)
             logger.info(f"Starting trading on {args.exchange}")
             
             if args.exchange == "kraken":
-                run_kraken()
+                run_kraken(logger=exchange_logger)
             elif args.exchange == "binanceus":
-                run_binanceus()
+                run_binanceus(logger=exchange_logger)
     
     except KeyboardInterrupt:
         logger.info("Shutting down...")

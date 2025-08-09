@@ -35,14 +35,23 @@ class ProcessManager:
     def __init__(self):
         self.processes: Dict[str, Optional[subprocess.Popen]] = {
             'status_server': None,
-            'kraken': None,
-            'binanceus': None
+            'kraken': None
+            # 'binanceus': None  # Temporarily disabled as per user request
         }
         self.base_cmd = [sys.executable]  # Use the same Python interpreter
         self.scripts_dir = Path(__file__).parent
         self.max_restart_attempts = 3
         self.restart_attempts = {name: 0 for name in self.processes}
         self.startup_delay = 5  # seconds between process starts
+        
+    def get_script_path(self, name: str) -> str:
+        """Get the path to the script for the given process name"""
+        if name == 'status_server':
+            return str(self.scripts_dir / 'status_server.py')
+        elif name == 'kraken':
+            return str(self.scripts_dir / 'run_bot.py --exchange kraken')
+        else:
+            raise ValueError(f"Unknown process name: {name}")
         
     def start_process(self, name: str) -> bool:
         """Start a process by name with error handling and logging"""
@@ -51,15 +60,16 @@ class ProcessManager:
             logger.error(f"Too many restart attempts for {name}. Manual intervention required.")
             return False
             
-        if name == 'status_server':
-            cmd = self.base_cmd + ['status_server.py']
-        elif name in ['kraken', 'binanceus']:
-            cmd = self.base_cmd + ['run_bot.py', '--exchange', name]
-        else:
-            logger.error(f"Unknown process: {name}")
-            return False
-        
         try:
+            # Set up the command based on the process name
+            if name == 'status_server':
+                cmd = self.base_cmd + ['status_server.py']
+            elif name == 'kraken':
+                cmd = self.base_cmd + ['run_bot.py', '--exchange', 'kraken']
+            else:
+                logger.error(f"Unknown process: {name}")
+                return False
+                
             # Set up log files for each process
             log_file = log_dir / f"{name}.log"
             with open(log_file, 'a') as f:

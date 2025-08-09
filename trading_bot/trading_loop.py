@@ -6,8 +6,9 @@ import os
 import time
 import ccxt
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
+# Import all required functions from ccxt_engine
 from ccxt_engine import (
     make_binanceus, 
     make_kraken, 
@@ -46,41 +47,102 @@ class TradingLoop:
         self.exchange_name = exchange.id
         self.quote_currency = quote_currency or ("USDT" if "binance" in self.exchange_name.lower() else "USD")
         self.cooldowns: Dict[str, float] = {}
+        self.sell_cooldowns: Dict[str, float] = {}  # Track cooldowns after selling positions
         self.open_trades: Dict[str, Dict] = {}
+        self.positions: Dict[str, Dict] = {}  # Track open positions and their PnL
         self.last_market_reload = 0
         self.market_reload_interval = 1800  # 30 minutes in seconds
         
+        # Balance management settings
+        self.min_profit_threshold = float(os.getenv("MIN_PROFIT_THRESHOLD", "-0.5"))  # -0.5% minimum PnL to consider selling
+        self.sell_cooldown_min = int(os.getenv("SELL_COOLDOWN_MIN", "15"))  # 15 minutes cooldown after selling
+        self.max_sell_attempts = int(os.getenv("MAX_SELL_ATTEMPTS", "3"))  # Max sell attempts per position
+        self.sell_attempts: Dict[str, int] = {}  # Track sell attempts per position
+        
     def get_trade_symbols(self) -> List[str]:
         """
-        Get the list of symbols to trade.
+        Get the list of valid symbols to trade.
         
         Returns:
-            List of trading pair symbols
+            List of valid trading pair symbols
         """
-        # Check for explicitly configured symbols
+        # Check for explicitly configured symbols first
         env_var = f"{self.exchange_name.upper()}_SYMBOLS"
-        if env_var in os.environ and os.environ[env_var]:
-            return [s.strip() for s in os.environ[env_var].split(",") if s.strip()]
+        logger.debug(f"Checking for symbols in environment variable: {env_var}")
         
-        # Otherwise discover symbols dynamically
+        # Debug log all environment variables for troubleshooting
+        logger.debug("=== Environment Variables ===")
+        for key, value in os.environ.items():
+            if key.startswith(self.exchange_name.upper()):
+                logger.debug(f"{key}: {'*' * 8 + value[-4:] if 'KEY' in key or 'SECRET' in key else value}")
+        logger.debug("============================")
+        
+        # Get the raw environment variable value
+        env_value = os.getenv(env_var, '').strip()
+        logger.debug(f"{env_var} raw value: '{env_var}='{env_value}'")
+        
+        # If the environment variable is not set or is empty, use auto-discovery
+        if not env_value or env_value.startswith('#'):
+            logger.info(f"{env_var} is empty or commented out, using auto-discovery")
+        else:
+            # Parse symbols, stripping whitespace and filtering out empty strings and comments
+            symbols = []
+            for s in env_value.split(','):
+                s = s.strip()
+                # Skip empty strings and comments
+                if not s or s.startswith('#'):
+                    logger.debug(f"Skipping empty or commented symbol: '{s}'")
+                    continue
+                # Check if the symbol is valid before adding it to the list
+                if self.is_valid_symbol(s):
+                    symbols.append(s)
+                else:
+                    logger.warning(f"Skipping invalid symbol: '{s}'")
+            
+            # If we have valid symbols, return them
+            if symbols:
+                logger.info(f"Using {len(symbols)} configured symbols: {symbols}")
+                return symbols
+            else:
+                logger.warning(f"No valid symbols found in {env_var}, falling back to auto-discovery")
+        
+        # If we get here, either no symbols were configured or they were all invalid
+        # So we'll discover symbols dynamically
         prefer_quotes = {"USDT", "USD"} if self.exchange_name.lower() == "binanceus" else {"USD"}
         max_price = float(os.getenv("MAX_PRICE", "5"))
         min_vol_usd = float(os.getenv("MIN_VOL_USD", "500000"))
         top_n = int(os.getenv("TOP_N_SYMBOLS", "25"))
         
+        logger.info(f"Discovering top {top_n} symbols with: max_price=${max_price}, min_vol=${min_vol_usd}")
+        
         try:
-            symbols = discover_symbols(
+            # Try to discover symbols
+            discovered_symbols = discover_symbols(
                 self.exchange,
                 prefer_quotes=prefer_quotes,
                 max_price=max_price,
                 min_vol_usd=min_vol_usd,
                 top_n=top_n
             )
-            logger.info(f"Discovered {len(symbols)} symbols to trade")
-            return symbols
+            
+            # Filter out any invalid symbols (shouldn't be necessary, but just in case)
+            valid_symbols = [s for s in discovered_symbols if self.is_valid_symbol(s)]
+            
+            if valid_symbols:
+                logger.info(f"Discovered {len(valid_symbols)} valid symbols: {valid_symbols}")
+                return valid_symbols
+            else:
+                logger.warning("No valid symbols discovered, using fallback symbols")
+                
         except Exception as e:
-            logger.error(f"Error discovering symbols: {e}")
-            return []
+            logger.error(f"Error discovering symbols: {e}", exc_info=True)
+            logger.warning("Symbol discovery failed, using fallback symbols")
+        
+        # If we get here, either discovery failed or returned no valid symbols
+        # Return a safe default set of symbols
+        fallback_symbols = ["BTC/USD", "ETH/USD"]
+        logger.info(f"Using fallback symbols: {fallback_symbols}")
+        return fallback_symbols
     
     def check_cooldown(self, symbol: str) -> bool:
         """
@@ -126,6 +188,276 @@ class TradingLoop:
             return True
         return False
     
+    def is_valid_symbol(self, symbol: str) -> bool:
+        """
+        Check if a symbol is valid for trading.
+        
+        Args:
+            symbol: Trading pair symbol to validate
+            
+        Returns:
+            bool: True if valid, False otherwise
+        """
+        if not symbol or not isinstance(symbol, str):
+            logger.warning(f"Invalid symbol type: {symbol}")
+            return False
+            
+        # Skip comments or empty strings
+        if symbol.strip().startswith('#') or not symbol.strip():
+            logger.warning(f"Skipping comment/empty symbol: '{symbol}'")
+            return False
+            
+        # Check if symbol exists in exchange markets
+        if not hasattr(self.exchange, 'markets') or not self.exchange.markets:
+            logger.warning("Exchange markets not loaded")
+            return False
+            
+        return symbol in self.exchange.markets
+            
+    def evaluate_positions(self) -> List[Dict[str, Any]]:
+        """
+        Evaluate all open positions and calculate their current PnL.
+        
+        Returns:
+            List of position dictionaries sorted by PnL (least profitable first)
+            with additional metadata for balance management
+        """
+        positions = []
+        try:
+            logger.info("Evaluating open positions for balance management...")
+            
+            # Get current ticker prices for all symbols
+            tickers = self.exchange.fetch_tickers()
+            
+            # Get open orders to avoid selling positions with pending orders
+            open_orders = self.exchange.fetch_open_orders()
+            symbols_with_orders = {order['symbol'] for order in open_orders}
+            
+            # Get account balance
+            balance = self.exchange.fetch_balance()
+            
+            # Check all quote currencies (USD, USDT, etc.)
+            for currency, amount in balance['total'].items():
+                if amount <= 0:
+                    continue
+                    
+                # Skip the quote currency itself
+                if currency.upper() == self.quote_currency.upper():
+                    continue
+                    
+                # Create symbol (e.g., 'BTC/USD')
+                symbol = f"{currency}/{self.quote_currency}"
+                
+                # Skip if we don't have market data for this symbol
+                if symbol not in self.exchange.markets:
+                    logger.debug(f"Skipping {symbol}: Not in markets")
+                    continue
+                    
+                # Skip if there are open orders for this symbol
+                if symbol in symbols_with_orders:
+                    logger.debug(f"Skipping {symbol}: Has open orders")
+                    continue
+                
+                # Skip if in sell cooldown
+                current_time = time.time()
+                if symbol in self.sell_cooldowns and current_time < self.sell_cooldowns[symbol]:
+                    remaining = int((self.sell_cooldowns[symbol] - current_time) / 60)  # in minutes
+                    logger.debug(f"Skipping {symbol}: In sell cooldown for {remaining} more minutes")
+                    continue
+                    
+                # Get current price with retry logic
+                current_price = None
+                for _ in range(3):  # Try up to 3 times
+                    try:
+                        if symbol in tickers:
+                            current_price = tickers[symbol]['last']
+                        else:
+                            ticker = self.exchange.fetch_ticker(symbol)
+                            current_price = ticker['last']
+                        break
+                    except Exception as e:
+                        logger.warning(f"Error getting price for {symbol}: {e}")
+                        time.sleep(1)  # Wait a bit before retry
+                
+                if current_price is None:
+                    logger.error(f"Failed to get price for {symbol} after multiple attempts")
+                    continue
+                
+                # Calculate PnL with more sophisticated logic
+                try:
+                    # Try to get actual entry price from open trades if available
+                    entry_price = None
+                    if symbol in self.open_trades:
+                        trade = self.open_trades[symbol]
+                        if 'entry_price' in trade:
+                            entry_price = trade['entry_price']
+                    
+                    # Fallback to estimation if no entry price available
+                    if entry_price is None:
+                        # Assume 0.5% slippage on entry
+                        entry_price = current_price * 0.995
+                        
+                        # If we have historical data, use it to improve the estimate
+                        try:
+                            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe='1h', limit=24)  # Last 24 hours
+                            if ohlcv and len(ohlcv) > 0:
+                                # Use the lowest price in the last 24 hours as a conservative estimate
+                                min_price = min(candle[3] for candle in ohlcv)  # Low price
+                                entry_price = min(entry_price, min_price)
+                        except Exception as e:
+                            logger.debug(f"Couldn't fetch historical data for {symbol}: {e}")
+                    
+                    # Calculate PnL
+                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                    
+                    # Calculate position value and PnL in quote currency
+                    position_value = amount * current_price
+                    pnl_value = (current_price - entry_price) * amount
+                    
+                    # Get position age if available
+                    position_age = 0
+                    if symbol in self.open_trades and 'entry_time' in self.open_trades[symbol]:
+                        position_age = (time.time() - self.open_trades[symbol]['entry_time']) / 3600  # in hours
+                    
+                    positions.append({
+                        'symbol': symbol,
+                        'currency': currency,
+                        'amount': amount,
+                        'entry_price': entry_price,
+                        'current_price': current_price,
+                        'value': position_value,
+                        'pnl_pct': pnl_pct,
+                        'pnl_value': pnl_value,
+                        'age_hours': position_age,
+                        'last_updated': time.time()
+                    })
+                    
+                    logger.debug(f"Evaluated {symbol}: {amount} @ {current_price} (Entry: {entry_price:.8f}, PnL: {pnl_pct:.2f}%)")
+                    
+                except Exception as e:
+                    logger.error(f"Error evaluating position {symbol}: {e}", exc_info=True)
+                    continue
+            
+            # Sort by PnL (least profitable first)
+            positions.sort(key=lambda x: x['pnl_pct'])
+            
+        except Exception as e:
+            logger.error(f"Error evaluating positions: {e}", exc_info=True)
+            
+        return positions
+    
+    def free_up_balance(self, required_amount: float) -> bool:
+        """
+        Try to free up balance by selling the least profitable positions.
+        
+        Args:
+            required_amount: Amount of quote currency needed
+            
+        Returns:
+            bool: True if enough balance was freed up, False otherwise
+        """
+        logger.info(f"Attempting to free up {required_amount} {self.quote_currency}")
+        
+        # Get current balance
+        current_balance = account_quote_balance(self.exchange, self.quote_currency)
+        if current_balance >= required_amount:
+            logger.info(f"Sufficient balance available: {current_balance} {self.quote_currency}")
+            return True
+        
+        logger.info(f"Current balance: {current_balance} {self.quote_currency}, Need additional: "
+                  f"{required_amount - current_balance} {self.quote_currency}")
+            
+        # Get all positions sorted by PnL (least profitable first)
+        positions = self.evaluate_positions()
+        
+        if not positions:
+            logger.warning("No positions available to sell")
+            return False
+            
+        logger.info(f"Evaluating {len(positions)} positions for potential sale")
+        
+        for position in positions:
+            if current_balance >= required_amount:
+                break
+                
+            symbol = position['symbol']
+            position_value = position['value']
+            pnl_pct = position['pnl_pct']
+            
+            # Check if position meets minimum profitability threshold
+            if pnl_pct > self.min_profit_threshold:
+                logger.info(f"Skipping {symbol}: PnL {pnl_pct:.2f}% is above threshold {self.min_profit_threshold}%")
+                continue
+                
+            # Check sell attempts
+            sell_attempts = self.sell_attempts.get(symbol, 0)
+            if sell_attempts >= self.max_sell_attempts:
+                logger.warning(f"Skipping {symbol}: Max sell attempts ({self.max_sell_attempts}) reached")
+                continue
+                
+            logger.info(f"Selling {position['amount']:.8f} {position['currency']} ({symbol}) "
+                      f"to free up ~{position_value:.2f} {self.quote_currency} (PnL: {pnl_pct:.2f}%)")
+            
+            try:
+                # Place a market sell order with proper error handling
+                order = place_market_order(
+                    self.exchange,
+                    symbol=symbol,
+                    side='sell',
+                    amount=position['amount']
+                )
+                
+                if order and 'id' in order:
+                    # Update sell attempts counter
+                    self.sell_attempts[symbol] = sell_attempts + 1
+                    
+                    # Set cooldown for this symbol
+                    self.sell_cooldowns[symbol] = time.time() + (self.sell_cooldown_min * 60)
+                    
+                    logger.info(f"Successfully placed sell order {order['id']} for {symbol}")
+                    
+                    # Update current balance estimate (we'll check actual balance after all sales)
+                    current_balance += position_value
+                    
+                    # Update the position in our tracking
+                    if symbol in self.positions:
+                        del self.positions[symbol]
+                        
+                    # Log the sale for record keeping
+                    logger.info(f"Sold {position['amount']:.8f} {position['currency']} at {position['current_price']} "
+                              f"(PnL: {pnl_pct:.2f}%, Value: {position_value:.2f} {self.quote_currency})")
+                    
+                    # Small delay to avoid rate limits
+                    time.sleep(1)
+                    
+                else:
+                    logger.error(f"Failed to place sell order for {symbol}")
+                    self.sell_attempts[symbol] = sell_attempts + 1
+                    
+            except Exception as e:
+                logger.error(f"Error selling {symbol}: {str(e)}", exc_info=True)
+                self.sell_attempts[symbol] = sell_attempts + 1
+                time.sleep(2)  # Wait a bit longer on error
+        
+        # Final balance check after all sales
+        current_balance = account_quote_balance(self.exchange, self.quote_currency)
+        if current_balance >= required_amount:
+            logger.info(f"Successfully freed up balance. New balance: {current_balance} {self.quote_currency}")
+            return True
+            
+        logger.warning(f"Could not free up enough balance. Current: {current_balance}, "
+                      f"Required: {required_amount}, Short by: {required_amount - current_balance}")
+        
+        # Log remaining positions for debugging
+        remaining_positions = [p for p in positions if p['symbol'] not in self.sell_cooldowns]
+        if remaining_positions:
+            logger.info("Remaining positions that could be sold (if they meet criteria):")
+            for pos in sorted(remaining_positions, key=lambda x: x['pnl_pct']):
+                logger.info(f"  {pos['symbol']}: {pos['amount']:.8f} @ {pos['current_price']} "
+                          f"(PnL: {pos['pnl_pct']:.2f}%, Value: {pos['value']:.2f} {self.quote_currency})")
+        
+        return False
+    
     def process_symbol(self, symbol: str) -> None:
         """
         Process a single trading symbol.
@@ -133,78 +465,178 @@ class TradingLoop:
         Args:
             symbol: Trading pair symbol
         """
+        # Skip if symbol is invalid
+        if not self.is_valid_symbol(symbol):
+            logger.warning(f"Skipping invalid symbol: '{symbol}'")
+            return
+            
         try:
-            # Skip if in cooldown or max trades reached
-            if self.check_cooldown(symbol) or self.check_max_open_trades():
+            # Skip if in cooldown
+            if self.check_cooldown(symbol):
                 return
             
-            # Get OHLCV data
-            timeframe = os.getenv("TIMEFRAME", "5m")
-            limit = 100  # Get enough candles for indicators
+            # Check if symbol is in sell cooldown
+            current_time = time.time()
+            if symbol in self.sell_cooldowns and current_time < self.sell_cooldowns[symbol]:
+                remaining = int((self.sell_cooldowns[symbol] - current_time) / 60)  # in minutes
+                logger.debug(f"Skipping {symbol}: In sell cooldown for {remaining} more minutes")
+                return
+                
+            # Check max open trades and try to free up balance if needed
+            max_open_trades = int(os.getenv("MAX_OPEN_TRADES", "6"))
+            if len(self.open_trades) >= max_open_trades:
+                logger.info(f"Max open trades reached ({max_open_trades}). Attempting to free up space...")
+                # Try to close the least profitable position
+                if not self.free_up_balance(0):  # Pass 0 to just close the least profitable position
+                    logger.warning(f"Max open trades reached ({max_open_trades}) and couldn't close any positions")
+                    return
+                
+                # Verify we have space now
+                if len(self.open_trades) >= max_open_trades:
+                    logger.warning("Still at max open trades after attempting to free up space")
+                    return
             
-            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-            if len(ohlcv) < 50:  # Need enough data for indicators
-                logger.debug(f"Not enough data for {symbol}")
+            # Get OHLCV data with error handling
+            try:
+                timeframe = os.getenv("TIMEFRAME", "5m")
+                limit = 100  # Get enough candles for indicators
+                
+                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+                if len(ohlcv) < 50:  # Need enough data for indicators
+                    logger.debug(f"Not enough data for {symbol} (got {len(ohlcv)} candles, need 50)")
+                    return
+                
+                # Get signal with tighter parameters for scalping
+                signal, price = breakout_signal(ohlcv)
+                if signal == "hold":
+                    return
+                    
+                # Additional confirmation for scalping
+                last_close = ohlcv[-1][4]  # Get the close of the last candle
+                price = last_close  # Use close price for scalping
+                
+                # Get order book for better entry/exit points
+                try:
+                    orderbook = self.exchange.fetch_order_book(symbol, limit=5)
+                    if signal == "buy":
+                        # Use ask price for buys
+                        price = orderbook['asks'][0][0] * 1.0005  # Slippage buffer
+                    else:  # sell
+                        # Use bid price for sells
+                        price = orderbook['bids'][0][0] * 0.9995  # Slippage buffer
+                except Exception as e:
+                    logger.warning(f"Couldn't fetch order book for {symbol}, using last price: {e}")
+                    price = last_close
+                
+                logger.info(f"{symbol} {signal.upper()} signal at {price}")
+                
+            except Exception as e:
+                logger.error(f"Error getting OHLCV data for {symbol}: {e}")
                 return
             
-            # Get signal
-            signal, price = breakout_signal(ohlcv)
-            if signal == "hold":
+            # Calculate position size with aggressive but managed risk
+            try:
+                # Get current balance
+                balance = account_quote_balance(self.exchange, self.quote_currency)
+                if balance <= 0:
+                    logger.warning(f"Insufficient {self.quote_currency} balance")
+                    return
+                
+                # Dynamic position sizing based on performance
+                risk_per_trade = float(os.getenv("RISK_PER_TRADE", "0.02"))  # 2% default
+                
+                # Scale position size based on signal strength
+                signal_strength = abs(ohlcv[-1][4] - ohlcv[-2][4]) / ohlcv[-2][4]
+                if signal_strength > 0.01:  # Strong signal
+                    risk_per_trade = min(0.03, risk_per_trade * 1.5)  # Up to 3% for strong signals
+                
+                notional = balance * risk_per_trade
+                
+                # Get initial amount
+                amount = sized_amount(self.exchange, symbol, notional, price)
+                
+                # If not enough balance, try to free up funds
+                if amount <= 0 or (amount * price) > balance:
+                    logger.info(f"Insufficient balance for {symbol}. Current: {balance}, Needed: {notional}")
+                    
+                    # Calculate how much more we need
+                    needed = notional - balance
+                    logger.info(f"Attempting to free up {needed} {self.quote_currency}")
+                    
+                    # Try to free up the needed amount plus a buffer
+                    if not self.free_up_balance(needed * 1.1):  # 10% buffer
+                        logger.warning(f"Could not free up enough balance for {symbol}")
+                        return
+                    
+                    # Recalculate with new balance
+                    balance = account_quote_balance(self.exchange, self.quote_currency)
+                    notional = balance * risk_per_trade
+                    amount = sized_amount(self.exchange, symbol, notional, price)
+                    
+                    if amount <= 0:
+                        logger.warning(f"Still insufficient balance for {symbol} after attempting to free up funds")
+                        return
+                
+                # Log position details before placing order
+                position_value = amount * price
+                logger.info(f"Preparing to place {symbol} order: {amount} @ ~{price} = {position_value} {self.quote_currency}")
+                
+            except Exception as e:
+                logger.error(f"Error calculating position size for {symbol}: {e}", exc_info=True)
                 return
             
-            logger.info(f"{symbol} {signal.upper()} signal at {price}")
-            
-            # Calculate position size
-            balance = account_quote_balance(self.exchange, self.quote_currency)
-            risk_per_trade = float(os.getenv("RISK_PER_TRADE", "0.0125"))  # 1.25%
-            notional = balance * risk_per_trade
-            
-            amount = sized_amount(self.exchange, symbol, notional, price)
-            if amount <= 0:
-                logger.warning(f"Invalid amount for {symbol}: {amount}")
+            # Place order with aggressive execution
+            try:
+                # Use IOC (Immediate or Cancel) for better fill prices
+                order_type = 'limit'  # Try limit first for better fills
+                params = {'timeInForce': 'IOC'}
+                
+                # Calculate precise entry with spread consideration
+                ticker = self.exchange.fetch_ticker(symbol)
+                spread = (ticker['ask'] - ticker['bid']) / ticker['bid']
+                
+                if signal == 'buy':
+                    limit_price = ticker['ask'] * 1.0003  # Slippage buffer
+                else:  # sell
+                    limit_price = ticker['bid'] * 0.9997  # Slippage buffer
+                
+                # Place the order
+                order = self.exchange.create_order(
+                    symbol=symbol,
+                    type=order_type,
+                    side=signal,
+                    amount=amount,
+                    price=limit_price,
+                    params=params
+                )
+                
+                if not order:
+                    # Fallback to market order if limit fails
+                    logger.warning(f"Limit order failed for {symbol}, trying market order")
+                    order = place_market_order(self.exchange, symbol, signal, amount)
+                    
+                if not order:
+                    logger.error(f"Failed to place {signal} order for {symbol}")
+                    self.update_cooldown(symbol)
+                    return
+                    
+                logger.info(f"Order executed: {order['side'].upper()} {order['amount']} {symbol} @ {order['price']}")
+                
+            except Exception as e:
+                logger.error(f"Error executing order for {symbol}: {e}")
                 self.update_cooldown(symbol)
                 return
             
-            # Place order
-            order = place_market_order(self.exchange, symbol, signal, amount)
-            if not order:
-                logger.error(f"Failed to place {signal} order for {symbol}")
-                self.update_cooldown(symbol)
-                return
+            # Enhanced exit strategy for scalping with dynamic parameters
+            tp_pct = float(os.getenv("TAKE_PROFIT_PERCENT", "0.75")) / 100  # 0.75%
+            sl_pct = float(os.getenv("STOP_LOSS_PERCENT", "0.25")) / 100    # 0.25%
             
-            # Start exit monitor in background
-            tp_pct = float(os.getenv("TP_PCT", "0.004"))  # 0.4%
-            sl_pct = float(os.getenv("SL_PCT", "0.003"))   # 0.3%
+            # Calculate dynamic trailing stop based on volatility
+            ticker = self.exchange.fetch_ticker(symbol)
+            spread = (ticker['ask'] - ticker['bid']) / ticker['bid']
             
-            start_exit_monitor(
-                self.exchange,
-                symbol=symbol,
-                side=signal,
-                amount=amount,
-                entry=price,
-                tp_pct=tp_pct,
-                sl_pct=sl_pct
-            )
-            
-            # Update state
-            self.open_trades[symbol] = {
-                'side': signal,
-                'amount': amount,
-                'entry': price,
-                'timestamp': time.time()
             }
-            
-            self.update_cooldown(symbol)
-            logger.info(f"Opened {signal} position: {amount} {symbol} @ {price}")
-            
-        except Exception as e:
-            logger.error(f"Error processing {symbol}: {e}", exc_info=True)
-            self.update_cooldown(symbol)
-    
-    def cleanup_closed_trades(self) -> None:
-        """Remove any closed trades from the open_trades dict."""
-        closed = []
-        for symbol in list(self.open_trades.keys()):
+        )
             try:
                 positions = self.exchange.fetch_positions([symbol])
                 has_open = any(p['contracts'] > 0 for p in positions if p and isinstance(p, dict))
@@ -265,22 +697,38 @@ class TradingLoop:
                 time.sleep(30)  # Avoid tight loop on error
 
 
-def run_kraken() -> None:
-    """Run the trading loop for Kraken."""
+def run_kraken(logger=None) -> None:
+    """Run the trading loop for Kraken.
+    
+    Args:
+        logger: Optional logger instance to use. If not provided, a default will be used.
+    """
+    if logger is None:
+        logger = logging.getLogger("trading_loop.kraken")
+        
     try:
         exchange = make_kraken()
         loop = TradingLoop(exchange, "USD")
+        logger.info("Starting Kraken trading loop")
         loop.run()
     except Exception as e:
         logger.error(f"Fatal error in Kraken trading loop: {e}", exc_info=True)
         raise
 
 
-def run_binanceus() -> None:
-    """Run the trading loop for Binance.US."""
+def run_binanceus(logger=None) -> None:
+    """Run the trading loop for Binance.US.
+    
+    Args:
+        logger: Optional logger instance to use. If not provided, a default will be used.
+    """
+    if logger is None:
+        logger = logging.getLogger("trading_loop.binanceus")
+        
     try:
         exchange = make_binanceus()
         loop = TradingLoop(exchange, "USDT")
+        logger.info("Starting Binance.US trading loop")
         loop.run()
     except Exception as e:
         logger.error(f"Fatal error in Binance.US trading loop: {e}", exc_info=True)

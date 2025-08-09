@@ -200,27 +200,83 @@ async def health_check() -> Dict[str, str]:
     """Health check endpoint."""
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
+def is_port_in_use(port: int) -> bool:
+    """Check if a port is already in use."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
+def find_available_port(start_port: int, max_attempts: int = 10) -> int:
+    """Find an available port starting from start_port."""
+    for port in range(start_port, start_port + max_attempts):
+        if not is_port_in_use(port):
+            return port
+    raise Exception(f"No available ports in range {start_port}-{start_port + max_attempts - 1}")
+
 def main() -> None:
-    """Run the status server."""
-    # Initialize exchanges
-    init_exchanges()
-    
-    # Load initial trade history
-    load_trade_history()
-    
-    # Start the server
-    host = os.getenv("STATUS_SERVER_HOST", "0.0.0.0")
-    port = int(os.getenv("STATUS_SERVER_PORT", "8000"))
-    
-    logger.info(f"Starting status server on http://{host}:{port}")
-    logger.info(f"API docs available at http://{host}:{port}/docs")
-    
-    uvicorn.run(
-        app,
-        host=host,
-        port=port,
-        log_level="info"
-    )
+    """Run the status server with error handling and port management."""
+    try:
+        # Initialize exchanges
+        logger.info("Initializing exchanges...")
+        init_exchanges()
+        
+        # Load initial trade history
+        logger.info("Loading trade history...")
+        load_trade_history()
+        
+        # Configure server
+        host = os.getenv("STATUS_SERVER_HOST", "0.0.0.0")
+        default_port = 8000
+        port = int(os.getenv("STATUS_SERVER_PORT", str(default_port)))
+        
+        # Find an available port if default is in use
+        if is_port_in_use(port):
+            logger.warning(f"Port {port} is already in use, trying next available port...")
+            port = find_available_port(port + 1)
+        
+        logger.info(f"Starting status server on http://{host}:{port}")
+        logger.info(f"API docs available at http://{host}:{port}/docs")
+        
+        # Configure logging for uvicorn
+        log_config = {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "handlers": {
+                "default": {
+                    "class": "logging.StreamHandler",
+                    "formatter": "default",
+                    "stream": "ext://sys.stderr",
+                },
+            },
+            "formatters": {
+                "default": {
+                    "fmt": "%(asctime)s - %(levelname)s - %(message)s",
+                    "use_colors": None,
+                },
+            },
+            "loggers": {
+                "uvicorn": {"handlers": ["default"], "level": "INFO"},
+                "uvicorn.error": {"level": "INFO"},
+                "uvicorn.access": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            },
+        }
+        
+        # Start the server with explicit logging config
+        config = uvicorn.Config(
+            app=app,
+            host=host,
+            port=port,
+            log_level="info",
+            log_config=log_config,
+            reload=False,
+            workers=1
+        )
+        server = uvicorn.Server(config)
+        server.run()
+        
+    except Exception as e:
+        logger.critical(f"Fatal error in status server: {e}", exc_info=True)
+        raise
 
 if __name__ == "__main__":
     main()

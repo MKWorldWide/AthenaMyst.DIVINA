@@ -1,7 +1,19 @@
 import os, time, math, threading, csv, datetime
-from typing import Dict, Any, List, Tuple, Optional, Set, Union
+from typing import Dict, Any, List, Tuple, Optional, Set, Union, Callable
 from dotenv import load_dotenv
 import ccxt
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(os.getenv("LOG_FILE", "trading_bot.log"))
+    ]
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -34,15 +46,26 @@ def make_kraken() -> ccxt.Exchange:
     Initialize and return a Kraken exchange instance with proper configuration.
     Handles time sync and market reload.
     """
-    ex = ccxt.kraken({
-        "apiKey": os.getenv("KRAKEN_API_KEY"),
-        "secret": os.getenv("KRAKEN_API_SECRET"),
-        "enableRateLimit": True,
-        "options": {
-            "adjustForTimeDifference": True,
-            "recvWindow": 60000,  # Kraken default is 60s
-        },
-    })
+    # Debug log environment variables
+    logger.debug("=== Kraken Environment Variables ===")
+    logger.debug(f"KRAKEN_API_KEY: {'*' * 8 + os.getenv('KRAKEN_API_KEY', '')[-4:] if os.getenv('KRAKEN_API_KEY') else 'Not set'}")
+    logger.debug(f"KRAKEN_API_SECRET: {'*' * 8 + os.getenv('KRAKEN_API_SECRET', '')[-4:] if os.getenv('KRAKEN_API_SECRET') else 'Not set'}")
+    logger.debug(f"KRAKEN_SYMBOLS: {os.getenv('KRAKEN_SYMBOLS', 'Not set')}")
+    logger.debug("==================================")
+    
+    try:
+        ex = ccxt.kraken({
+            "apiKey": os.getenv("KRAKEN_API_KEY"),
+            "secret": os.getenv("KRAKEN_API_SECRET"),
+            "enableRateLimit": True,
+            "options": {
+                "adjustForTimeDifference": True,
+                "recvWindow": 60000,  # Kraken default is 60s
+            },
+        })
+    except Exception as e:
+        logger.error(f"Failed to initialize Kraken exchange: {e}", exc_info=True)
+        raise
     # Force reload markets to ensure we have latest precision info
     ex.load_markets(True)
     
@@ -78,43 +101,83 @@ def discover_symbols(
     Returns:
         List of symbol strings sorted by volume (highest first)
     """
+    logger.info(f"Starting symbol discovery for {ex.id}...")
+    
     if prefer_quotes is None:
         prefer_quotes = {"USDT", "USD"}
     if max_price is None:
         max_price = float(os.getenv("MAX_PRICE", "5"))
     if min_vol_usd is None:
         min_vol_usd = float(os.getenv("MIN_VOL_USD", "500000"))
+        
+    logger.info(f"Discovery params - Prefer quotes: {prefer_quotes}, Max price: ${max_price}, Min volume: ${min_vol_usd}, Top N: {top_n}")
     
-    tickers = ex.fetch_tickers()
+    try:
+        tickers = ex.fetch_tickers()
+        logger.info(f"Fetched {len(tickers)} tickers from {ex.id}")
+    except Exception as e:
+        logger.error(f"Error fetching tickers: {e}")
+        return []
+        
     picks = []
     
     for symbol, t in tickers.items():
         try:
             # Skip if market data is incomplete
-            if symbol not in ex.markets or not ex.markets[symbol].get('active', True):
+            if symbol not in ex.markets:
+                logger.debug(f"Skipping {symbol}: Not in markets")
                 continue
                 
             market = ex.markets[symbol]
+            
+            if not market.get('active', True):
+                logger.debug(f"Skipping {symbol}: Market not active")
+                continue
+                
             base = market.get('base', '').upper()
             quote = market.get('quote', '').upper()
             
-            # Filter criteria
-            if (quote not in prefer_quotes or  # Only preferred quote currencies
-                base in STABLES or             # No stablecoin bases
-                not t.get('last') or           # Must have price
-                not t.get('quoteVolume', 0) >= min_vol_usd or  # Volume threshold
-                t['last'] >= max_price):       # Price threshold
+            # Skip if missing required market data
+            if not base or not quote:
+                logger.debug(f"Skipping {symbol}: Missing base/quote info")
+                continue
+            
+            # Filter criteria with debug logging
+            if quote not in prefer_quotes:
+                logger.debug(f"Skipping {symbol}: Quote {quote} not in preferred quotes {prefer_quotes}")
                 continue
                 
-            picks.append((symbol, t.get('quoteVolume', 0)))
+            if base in STABLES:
+                logger.debug(f"Skipping {symbol}: Base {base} is a stablecoin")
+                continue
+                
+            if not t.get('last'):
+                logger.debug(f"Skipping {symbol}: No last price")
+                continue
+                
+            volume = t.get('quoteVolume', 0)
+            if volume < min_vol_usd:
+                logger.debug(f"Skipping {symbol}: Volume ${volume} < ${min_vol_usd}")
+                continue
+                
+            if t['last'] >= max_price:
+                logger.debug(f"Skipping {symbol}: Price ${t['last']} >= ${max_price}")
+                continue
+                
+            # If we get here, symbol passes all filters
+            logger.debug(f"Adding {symbol}: Price=${t['last']}, Volume=${volume}")
+            picks.append((symbol, volume))
             
         except Exception as e:
-            print(f"Error processing {symbol}: {e}")
+            logger.error(f"Error processing {symbol}: {e}", exc_info=True)
             continue
     
     # Sort by highest volume first and take top N
     picks.sort(key=lambda x: x[1], reverse=True)
-    return [s for s, _ in picks[:top_n]]
+    result = [s for s, _ in picks[:top_n]]
+    
+    logger.info(f"Discovered {len(result)}/{len(picks)} symbols (top {top_n} by volume): {result}")
+    return result
 
 def account_quote_balance(ex: ccxt.Exchange, quote: str = None) -> float:
     """
@@ -166,26 +229,34 @@ def sized_amount(ex: ccxt.Exchange, symbol: str, notional: float, price: float) 
         min_cost = market.get('limits', {}).get('cost', {}).get('min', 0)
         min_amount = market.get('limits', {}).get('amount', {}).get('min', 0)
         
-        print(f"\n[DEBUG] position_size({symbol}, risk_amount={risk_amount}, price={price})")
-        print(f"[DEBUG] min_cost={min_cost}, min_amount={min_amount}")
+        logger.debug(f"[sized_amount] {symbol} - notional: {notional}, price: {price}")
+        logger.debug(f"[sized_amount] {symbol} - min_cost: {min_cost}, min_amount: {min_amount}")
         
-        # Calculate raw amount based on risk
-        amount = risk_amount / price
-        print(f"[DEBUG] Raw amount: {amount}")
-        
-        # Check minimum cost
-        if amount * price < min_cost:
-            print(f"[DEBUG] Amount {amount * price} < min_cost {min_cost}, adjusting")
-        
-        # Ensure we meet minimum cost
-        if price * amt < min_cost:
-            amt = float(ex.amount_to_precision(symbol, (min_cost/price) * 1.02))
-        
-        # Final sanity check
-        if price * amt < min_cost:
+        # Calculate raw amount based on notional value
+        if price <= 0:
+            logger.error(f"Invalid price {price} for {symbol}")
             return 0.0
             
-        return amt
+        amount = notional / price
+        logger.debug(f"[sized_amount] {symbol} - raw amount: {amount}")
+        
+        # Check if amount is below minimum
+        if amount < min_amount:
+            logger.warning(f"Amount {amount} is below minimum {min_amount} for {symbol}")
+            return 0.0
+            
+        # Check if notional value is below minimum cost
+        notional_value = amount * price
+        if notional_value < min_cost:
+            logger.warning(f"Notional value {notional_value} is below minimum {min_cost} for {symbol}")
+            return 0.0
+            
+        # Apply precision
+        precision = market['precision']['amount']
+        amount = float(ex.amount_to_precision(symbol, amount))
+        logger.debug(f"[sized_amount] {symbol} - final amount after precision: {amount}")
+        
+        return amount if amount > 0 else 0.0
         
     except Exception as e:
         print(f"Error in sized_amount for {symbol}: {e}")
@@ -220,7 +291,7 @@ def breakout_signal(ohlcv: List[List[float]], lookback: int = 20, buffer: float 
 
 def place_market_order(ex: ccxt.Exchange, symbol: str, side: str, amount: float) -> Dict[str, Any]:
     """
-    Place a market order with error handling and logging.
+    Place a market order with comprehensive validation and error handling.
     
     Args:
         ex: Exchange instance
@@ -232,33 +303,240 @@ def place_market_order(ex: ccxt.Exchange, symbol: str, side: str, amount: float)
         Order info dict or empty dict on failure
     """
     try:
+        # Get market info for validation
+        market = ex.market(symbol)
+        min_amount = market.get('limits', {}).get('amount', {}).get('min', 0)
+        min_cost = market.get('limits', {}).get('cost', {}).get('min', 0)
+        
         # Ensure amount is within precision limits
-        amount = float(ex.amount_to_precision(symbol, amount))
-        if amount <= 0:
-            print(f"Invalid amount {amount} for {symbol}")
+        try:
+            amount = float(ex.amount_to_precision(symbol, amount))
+        except Exception as e:
+            logger.error(f"Failed to format amount {amount} for {symbol}: {e}")
             return {}
             
-        order = ex.create_order(
-            symbol=symbol,
-            type='market',
-            side=side,
-            amount=amount
-        )
-        
-        # Log the order
-        log_fill(
-            ex=ex.id,
-            symbol=symbol,
-            side=side,
-            amount=amount,
-            price=order.get('price') or order.get('average') or 0,
-            order_id=order.get('id', '')
-        )
-        
-        return order
-        
+        # Validate amount against minimums
+        if amount <= 0:
+            logger.error(f"Invalid amount {amount} for {symbol}")
+            return {}
+            
+        if amount < min_amount:
+            logger.error(f"Amount {amount} is below minimum {min_amount} for {symbol}")
+            return {}
+            
+        # Get current price to check minimum notional
+        try:
+            ticker = ex.fetch_ticker(symbol)
+            price = ticker['last'] if ticker and 'last' in ticker else 0
+            
+            if price <= 0:
+                logger.error(f"Invalid price {price} for {symbol}")
+                return {}
+                
+            notional_value = amount * price
+            
+            if notional_value < min_cost:
+                logger.error(f"Notional value {notional_value} is below minimum {min_cost} for {symbol}")
+                return {}
+                
+            logger.info(f"Placing {side.upper()} order: {amount} {symbol} @ ~{price} (notional: {notional_value:.8f} {symbol.split('/')[1]})")
+            
+            # Place the order
+            order = ex.create_order(
+                symbol=symbol,
+                type='market',
+                side=side,
+                amount=amount
+            )
+            
+            # Log the order
+            if order and 'id' in order:
+                logger.info(f"Order placed: {order['id']} - {side.upper()} {amount} {symbol}")
+                log_fill(ex=ex, order=order)
+                return order
+                
+            logger.error(f"Failed to place order: {order}")
+            return {}
+            
+        except ccxt.NetworkError as e:
+            logger.error(f"Network error while placing order: {e}")
+            return {}
+        except ccxt.ExchangeError as e:
+            logger.error(f"Exchange error while placing order: {e}")
+            return {}
+            
     except ccxt.InsufficientFunds as e:
-        print(f"Insufficient funds for {side} {amount} {symbol}: {e}")
+        logger.error(f"Insufficient funds for {side} {amount} {symbol}: {e}")
+        return {}
+    except ccxt.InvalidOrder as e:
+        logger.error(f"Invalid order parameters for {side} {amount} {symbol}: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"Unexpected error in place_market_order: {e}", exc_info=True)
+        return {}
+        return {}
+    except ccxt.ExchangeError as e:
+        logger.error(f"Exchange error on {side} {amount} {symbol}: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"Unexpected error placing {side} order for {amount} {symbol}: {e}", exc_info=True)
+        return {}
+
+
+def start_exit_monitor(
+    exchange: ccxt.Exchange, 
+    symbol: str, 
+    side: str, 
+    amount: float, 
+    entry: float,
+    tp_pct: float,
+    sl_pct: float,
+    trailing_stop: bool = True,
+    trailing_deviation: float = 0.1  # 0.1% trailing stop
+):
+    """
+    Enhanced exit monitor for scalping strategy with trailing stops and dynamic exits.
+    
+    Args:
+        exchange: The exchange instance
+        symbol: Trading pair (e.g., 'BTC/USDT')
+        side: 'buy' or 'sell'
+        amount: Amount in base currency
+        entry: Entry price
+        tp_pct: Take profit percentage (e.g., 0.0075 for 0.75%)
+        sl_pct: Stop loss percentage (e.g., 0.0025 for 0.25%)
+        trailing_stop: Whether to use trailing stop
+        trailing_deviation: Trailing stop deviation percentage
+    """
+    def monitor():
+        try:
+            logger.info(f"Starting exit monitor for {symbol} {side.upper()} {amount} @ {entry}")
+            
+            # Calculate initial exit prices
+            if side == 'buy':
+                take_profit = entry * (1 + tp_pct)
+                stop_loss = entry * (1 - sl_pct)
+                highest_price = entry
+            else:  # sell/short
+                take_profit = entry * (1 - tp_pct)
+                stop_loss = entry * (1 + sl_pct)
+                lowest_price = entry
+            
+            logger.info(f"Initial TP: {take_profit:.8f}, SL: {stop_loss:.8f}")
+            
+            while True:
+                try:
+                    # Get current ticker
+                    ticker = exchange.fetch_ticker(symbol)
+                    current_price = ticker['last']
+                    
+                    # Update trailing stop for long positions
+                    if side == 'buy' and trailing_stop:
+                        if current_price > highest_price:
+                            highest_price = current_price
+                            # Update stop loss to trail below the highest price
+                            new_sl = highest_price * (1 - trailing_deviation/100)
+                            stop_loss = max(stop_loss, new_sl)
+                    # Update trailing stop for short positions
+                    elif side == 'sell' and trailing_stop:
+                        if current_price < lowest_price:
+                            lowest_price = current_price
+                            # Update stop loss to trail above the lowest price
+                            new_sl = lowest_price * (1 + trailing_deviation/100)
+                            stop_loss = min(stop_loss, new_sl)
+                    
+                    # Check exit conditions
+                    if (side == 'buy' and (current_price >= take_profit or current_price <= stop_loss)) or \
+                       (side == 'sell' and (current_price <= take_profit or current_price >= stop_loss)):
+                        
+                        # Determine exit side (opposite of entry)
+                        exit_side = 'sell' if side == 'buy' else 'buy'
+                        
+                        # Place market order to exit
+                        logger.info(f"Exiting {symbol} {side.upper()} at {current_price} "
+                                  f"(TP: {take_profit:.8f}, SL: {stop_loss:.8f})")
+                        
+                        # Use IOC (Immediate or Cancel) for better execution
+                        order = exchange.create_order(
+                            symbol=symbol,
+                            type='limit',
+                            side=exit_side,
+                            amount=amount,
+                            price=current_price,
+                            params={'timeInForce': 'IOC'}
+                        )
+                        
+                        if order and order.get('status') == 'closed':
+                            log_fill(exchange, order)
+                            logger.info(f"Successfully exited {symbol} at {order['price']}")
+                        else:
+                            # Fallback to market order if limit fails
+                            logger.warning("Limit exit failed, trying market order")
+                            order = place_market_order(exchange, symbol, exit_side, amount)
+                            if order:
+                                log_fill(exchange, order)
+                        
+                        break
+                    
+                    # Small delay to avoid rate limits
+                    time.sleep(1)
+                    
+                except Exception as e:
+                    logger.error(f"Error in exit monitor for {symbol}: {e}")
+                    time.sleep(5)  # Wait before retrying
+        
+        except Exception as e:
+            logger.error(f"Fatal error in exit monitor for {symbol}: {e}", exc_info=True)
+    
+    # Start the monitor in a daemon thread
+    thread = threading.Thread(target=monitor, daemon=True)
+    thread.start()
+    return thread
+
+
+def log_fill(exchange: ccxt.Exchange, order: Dict) -> None:
+    """
+    Log a filled order to the PnL log file.
+    
+    Args:
+        exchange: The exchange instance
+        order: The filled order details from CCXT
+    """
+    try:
+        pnl_file = os.getenv("PNL_LOG_FILE", "trading_pnl.csv")
+        file_exists = os.path.isfile(pnl_file)
+        
+        with open(pnl_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            
+            # Write header if file doesn't exist
+            if not file_exists:
+                writer.writerow([
+                    'timestamp', 'exchange', 'symbol', 'side', 'price',
+                    'amount', 'cost', 'fee', 'fee_currency', 'status'
+                ])
+            
+            # Calculate fee info
+            fee = order.get('fee', {})
+            fee_cost = fee.get('cost', 0)
+            fee_currency = fee.get('currency', '')
+            
+            writer.writerow([
+                order.get('timestamp', int(time.time() * 1000)),
+                exchange.id,
+                order.get('symbol', ''),
+                order.get('side', '').lower(),
+                order.get('price', 0),
+                order.get('filled', 0),
+                order.get('cost', 0),
+                fee_cost,
+                fee_currency,
+                order.get('status', '')
+            ])
+            
+        logger.info(f"Logged {order['side']} order for {order['symbol']} to {pnl_file}")
+    except Exception as e:
+        logger.error(f"Error logging fill: {e}", exc_info=True)
     except ccxt.InvalidOrder as e:
         print(f"Invalid order parameters for {side} {amount} {symbol}: {e}")
     except ccxt.ExchangeError as e:
