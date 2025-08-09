@@ -1,53 +1,83 @@
-# Trading Bot with Discord Integration
+# Crypto Trading Bot
 
-A powerful trading bot that integrates with Discord for notifications and commands, featuring real-time market analysis and automated trading capabilities.
+A high-performance, multi-exchange cryptocurrency trading bot with a focus on reliability and risk management. The bot supports Binance.US and Kraken exchanges with dynamic symbol discovery and position sizing.
 
 ## Features
 
-- 📊 Real-time market analysis with technical indicators (RSI, EMA, MACD, ATR)
-- 🤖 Automated trading based on technical signals
-- 💬 Discord integration for notifications and commands
-- 🔔 Customizable alerts and notifications
-- 📈 Support for multiple trading pairs
-- 🛡️ Risk management with stop-loss and take-profit
+- 🚀 **Multi-Exchange Support**: Trade on Binance.US and Kraken simultaneously
+- 🔍 **Dynamic Symbol Discovery**: Automatically finds top liquid assets under $5
+- ⚡ **High Performance**: Asynchronous architecture for optimal performance
+- 📊 **Risk Management**: Configurable risk per trade, stop-loss, and take-profit
+- 📈 **Real-time Monitoring**: Built-in web interface for monitoring trades and PnL
+- 🔒 **Secure**: Secure API key handling and request signing
+- 📝 **Comprehensive Logging**: Detailed logs for debugging and performance analysis
 
 ## Prerequisites
 
-- Python 3.8 or higher
-- Discord account and server
-- Binance account (or another supported exchange)
+- Python 3.9 or higher
+- Binance.US and/or Kraken exchange account with API keys
+- (Optional) Basic understanding of cryptocurrency trading and risk management
 
 ## Installation
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/trading-bot.git
-   cd trading-bot
+   git clone https://github.com/yourusername/crypto-trading-bot.git
+   cd crypto-trading-bot
    ```
 
-2. Create a virtual environment and activate it:
+2. Create and activate a virtual environment:
    ```bash
+   # Linux/macOS
    python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   source venv/bin/activate
+   
+   # Windows
+   python -m venv venv
+   .\venv\Scripts\activate
    ```
 
-3. Install the required packages:
+3. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
-4. Copy the example environment file and update it with your credentials:
-   ```bash
-   cp .env.example .env
-   ```
-   Edit the `.env` file with your Discord bot token, webhook URL, and exchange API keys.
+4. Configure your environment:
+   - Copy `.env.example` to `.env`
+   - Update with your API keys and trading parameters
 
 ## Configuration
 
-1. **Discord Bot Setup**
-   - Create a new Discord application at [Discord Developer Portal](https://discord.com/developers/applications)
-   - Create a bot user and copy the token
-   - Invite the bot to your server with the following permissions:
+Edit the `.env` file with your configuration:
+
+```ini
+# Trading Parameters
+RISK_PER_TRADE=0.0125        # 1.25% of quote balance per trade
+TP_PCT=0.004                 # 0.4% take profit
+SL_PCT=0.003                 # 0.3% stop loss
+MAX_OPEN_TRADES=6            # Max open trades per exchange
+COOLDOWN_MIN=20              # Minutes between trades on same symbol
+MIN_VOL_USD=500000           # Minimum 24h volume in USD
+MAX_PRICE=5                  # Maximum asset price to trade
+
+# Binance.US API
+BINANCE_API_KEY=your_api_key_here
+BINANCE_API_SECRET=your_api_secret_here
+BINANCE_RECVWINDOW=15000     # Request timeout in ms
+
+# Kraken API
+KRAKEN_API_KEY=your_api_key_here
+KRAKEN_API_SECRET=your_api_secret_here
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FILE=trading_bot.log
+PNL_LOG_FILE=trading_pnl.csv
+
+# Status Server
+STATUS_SERVER_HOST=0.0.0.0
+STATUS_SERVER_PORT=8000
+```
      - Send Messages
      - Embed Links
      - Read Messages/View Channels

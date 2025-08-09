@@ -1,0 +1,2 @@
+timestamp,exchange,symbol,side,price,amount,cost,pnl,pnl_pct,fee,fee_currency,status
+2025-08-08T22:00:00Z,binanceus,BTC/USDT,buy,50000.00,0.001,50.00,0.00,0.0,0.05,USDT,open
