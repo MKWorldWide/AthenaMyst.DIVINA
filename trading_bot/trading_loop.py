@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 # Import all required functions from ccxt_engine
-from ccxt_engine import (
+from .ccxt_engine import (
     make_binanceus, 
     make_kraken, 
     discover_symbols,
@@ -56,13 +56,14 @@ class TradeSignal:
 class TradingLoop:
     """Main trading loop implementation."""
     
-    def __init__(self, exchange: ccxt.Exchange, quote_currency: str = None):
+    def __init__(self, exchange: ccxt.Exchange, quote_currency: str = None, dry_run: bool = False):
         """
         Initialize the trading loop.
         
         Args:
             exchange: Initialized CCXT exchange instance
             quote_currency: Default quote currency (e.g., 'USDT', 'USD')
+            dry_run: If True, no actual trades will be placed
         """
         self.exchange = exchange
         self.exchange_name = exchange.id
@@ -70,10 +71,14 @@ class TradingLoop:
         self.cooldowns: Dict[str, float] = {}
         self.sell_cooldowns: Dict[str, float] = {}
         self.open_trades: Dict[str, Dict] = {}
+        self.dry_run = dry_run
         self.config = self._load_config()
         
         # Initialize exchange settings
         self._init_exchange_settings()
+        
+        if self.dry_run:
+            logger.warning("DRY RUN MODE ENABLED - No actual trades will be placed")
     
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from environment variables."""
@@ -173,24 +178,30 @@ class TradingLoop:
                 
             # Place buy order
             logger.info(f"Placing BUY order for {symbol}: {position_size:.8f} @ {price:.8f}")
-            order = place_market_order(
-                self.exchange, 
-                symbol, 
-                'buy', 
-                position_size, 
-                price
-            )
             
-            if order and 'id' in order:
-                # Start exit monitoring for this position
-                start_exit_monitor(
+            if self.dry_run:
+                logger.info("[DRY RUN] Would place BUY order")
+                order = {'id': 'dry-run-order-123'}
+            else:
+                order = place_market_order(
                     self.exchange, 
                     symbol, 
-                    order['id'], 
-                    price, 
-                    self.config['stop_loss_pct'], 
-                    self.config['take_profit_pct']
+                    'buy', 
+                    position_size, 
+                    price
                 )
+            
+            if order and 'id' in order:
+                if not self.dry_run:
+                    # Start exit monitoring for this position
+                    start_exit_monitor(
+                        self.exchange, 
+                        symbol, 
+                        order['id'], 
+                        price, 
+                        self.config['stop_loss_pct'], 
+                        self.config['take_profit_pct']
+                    )
                 
                 # Record the trade
                 self.open_trades[symbol] = {
@@ -198,7 +209,8 @@ class TradingLoop:
                     'amount': position_size,
                     'entry_time': time.time(),
                     'status': 'open',
-                    'order_id': order['id']
+                    'order_id': order['id'],
+                    'dry_run': self.dry_run
                 }
                 
                 logger.info(f"Successfully opened position in {symbol}")
@@ -220,13 +232,18 @@ class TradingLoop:
                 
             # Place sell order
             logger.info(f"Placing SELL order for {symbol}: {position['amount']:.8f} @ {price:.8f}")
-            order = place_market_order(
-                self.exchange, 
-                symbol, 
-                'sell', 
-                position['amount'], 
-                price
-            )
+            
+            if self.dry_run or position.get('dry_run', False):
+                logger.info("[DRY RUN] Would place SELL order")
+                order = {'id': 'dry-run-order-456'}
+            else:
+                order = place_market_order(
+                    self.exchange, 
+                    symbol, 
+                    'sell', 
+                    position['amount'], 
+                    price
+                )
             
             if order and 'id' in order:
                 # Update trade status
@@ -235,7 +252,7 @@ class TradingLoop:
                 position['exit_time'] = time.time()
                 position['pnl_pct'] = ((price - position['entry_price']) / position['entry_price']) * 100
                 
-                logger.info(f"Successfully closed position in {symbol}: "
+                logger.info(f"{'[DRY RUN] ' if self.dry_run else ''}Successfully {'simulated ' if self.dry_run else ''}closed position in {symbol}: "
                           f"P&L: {position['pnl_pct']:.2f}%")
                 
                 # Set cooldown for this symbol
@@ -298,21 +315,33 @@ class TradingLoop:
         if closed_trades:
             logger.debug(f"Cleaned up {len(closed_trades)} closed trades")
 
-def run_kraken(quote_currency: str = 'USD') -> None:
-    """Run the trading loop for Kraken."""
+def run_kraken(quote_currency: str = 'USD', dry_run: bool = False) -> None:
+    """
+    Run the trading loop for Kraken.
+    
+    Args:
+        quote_currency: The quote currency to use (default: 'USD')
+        dry_run: If True, no actual trades will be placed
+    """
     try:
         exchange = make_kraken()
-        bot = TradingLoop(exchange, quote_currency)
+        bot = TradingLoop(exchange, quote_currency, dry_run)
         bot.run()
     except Exception as e:
         logger.critical(f"Failed to start Kraken trading bot: {e}", exc_info=True)
         raise
 
-def run_binanceus(quote_currency: str = 'USDT') -> None:
-    """Run the trading loop for Binance.US."""
+def run_binanceus(quote_currency: str = 'USDT', dry_run: bool = False) -> None:
+    """
+    Run the trading loop for Binance.US.
+    
+    Args:
+        quote_currency: The quote currency to use (default: 'USDT')
+        dry_run: If True, no actual trades will be placed
+    """
     try:
         exchange = make_binanceus()
-        bot = TradingLoop(exchange, quote_currency)
+        bot = TradingLoop(exchange, quote_currency, dry_run)
         bot.run()
     except Exception as e:
         logger.critical(f"Failed to start Binance.US trading bot: {e}", exc_info=True)
@@ -327,10 +356,12 @@ if __name__ == "__main__":
                       help='Exchange to trade on')
     parser.add_argument('--quote', type=str, default=None,
                       help='Quote currency (default: USD for Kraken, USDT for Binance.US)')
+    parser.add_argument('--dry-run', action='store_true',
+                      help='Run in dry-run mode (no actual trades)')
     
     args = parser.parse_args()
     
     if args.exchange == 'kraken':
-        run_kraken(args.quote or 'USD')
+        run_kraken(args.quote or 'USD', args.dry_run)
     elif args.exchange == 'binanceus':
-        run_binanceus(args.quote or 'USDT')
+        run_binanceus(args.quote or 'USDT', args.dry_run)
