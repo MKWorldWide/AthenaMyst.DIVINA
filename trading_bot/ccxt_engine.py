@@ -225,69 +225,145 @@ def sized_amount(ex: ccxt.Exchange, symbol: str, notional: float, price: float) 
         Amount in base currency, or 0 if below minimums
     """
     try:
-        market = ex.markets[symbol]
+        # Get market info with detailed logging
+        market = ex.markets.get(symbol)
+        if not market:
+            logger.error(f"[sized_amount] {symbol} - Market not found in exchange markets")
+            return 0.0
+            
         min_cost = market.get('limits', {}).get('cost', {}).get('min', 0)
         min_amount = market.get('limits', {}).get('amount', {}).get('min', 0)
         
-        logger.debug(f"[sized_amount] {symbol} - notional: {notional}, price: {price}")
-        logger.debug(f"[sized_amount] {symbol} - min_cost: {min_cost}, min_amount: {min_amount}")
+        logger.info(f"[sized_amount] {symbol} - Calculating order size")
+        logger.info(f"[sized_amount] {symbol} - Notional: {notional} {symbol.split('/')[1]}, Price: {price}")
+        logger.info(f"[sized_amount] {symbol} - Min cost: {min_cost}, Min amount: {min_amount}")
         
         # Calculate raw amount based on notional value
         if price <= 0:
-            logger.error(f"Invalid price {price} for {symbol}")
+            logger.error(f"[sized_amount] {symbol} - Invalid price: {price}")
             return 0.0
             
         amount = notional / price
-        logger.debug(f"[sized_amount] {symbol} - raw amount: {amount}")
+        logger.info(f"[sized_amount] {symbol} - Raw amount before checks: {amount}")
         
         # Check if amount is below minimum
         if amount < min_amount:
-            logger.warning(f"Amount {amount} is below minimum {min_amount} for {symbol}")
+            logger.warning(f"[sized_amount] {symbol} - Amount {amount} is below minimum {min_amount}")
             return 0.0
             
         # Check if notional value is below minimum cost
         notional_value = amount * price
         if notional_value < min_cost:
-            logger.warning(f"Notional value {notional_value} is below minimum {min_cost} for {symbol}")
+            logger.warning(f"[sized_amount] {symbol} - Notional value {notional_value} is below minimum {min_cost}")
             return 0.0
             
         # Apply precision
-        precision = market['precision']['amount']
+        precision = market.get('precision', {}).get('amount')
+        if precision is None:
+            logger.error(f"[sized_amount] {symbol} - Could not determine precision for amount")
+            return 0.0
+            
         amount = float(ex.amount_to_precision(symbol, amount))
-        logger.debug(f"[sized_amount] {symbol} - final amount after precision: {amount}")
+        logger.info(f"[sized_amount] {symbol} - Final amount after precision: {amount}")
         
+        if amount <= 0:
+            logger.warning(f"[sized_amount] {symbol} - Final amount is zero or negative: {amount}")
+            
         return amount if amount > 0 else 0.0
         
     except Exception as e:
-        print(f"Error in sized_amount for {symbol}: {e}")
+        logger.error(f"[sized_amount] Error calculating size for {symbol}: {str(e)}", exc_info=True)
         return 0.0
 
-def breakout_signal(ohlcv: List[List[float]], lookback: int = 20, buffer: float = 0.0005) -> Tuple[str, float]:
+def breakout_signal(ohlcv: List[List[float]], lookback: int = 14, buffer: float = 0.0005) -> Tuple[str, float]:
     """
-    Generate buy/sell signals based on price breakout with buffer to reduce noise.
+    Generate buy/sell signals based on price breakout with volume confirmation.
     
     Args:
         ohlcv: List of [timestamp, open, high, low, close, volume] lists
-        lookback: Number of candles to look back for breakout detection (default: 20)
+        lookback: Number of candles to look back for breakout detection (default: 14)
         buffer: Price buffer to reduce false breakouts (default: 0.0005 = 0.05%)
         
     Returns:
         Tuple of (signal, price) where signal is 'buy', 'sell', or 'hold'
     """
     if len(ohlcv) < lookback + 1:
+        logger.debug(f"Not enough data for breakout signal. Need {lookback + 1} candles, got {len(ohlcv)}")
+        return "hold", 0.0
+    
+    try:
+        # Extract price and volume data
+        highs = [c[2] for c in ohlcv[-(lookback+1):]]
+        lows = [c[3] for c in ohlcv[-(lookback+1):]]
+        closes = [c[4] for c in ohlcv[-(lookback+1):]]
+        volumes = [c[5] for c in ohlcv[-(lookback+1):]]
+        
+        last_close = closes[-1]
+        prev_close = closes[-2]
+        
+        # Calculate average volume for volume confirmation (using a shorter lookback)
+        volume_lookback = min(10, len(volumes)-1)  # Use shorter lookback for volume
+        avg_volume = sum(volumes[-(volume_lookback+1):-1]) / volume_lookback if volume_lookback > 0 else volumes[-1]
+        last_volume = volumes[-1]
+        
+        # Calculate recent price range for volatility adjustment
+        recent_high = max(highs[-10:])  # Last 10 candles high
+        recent_low = min(lows[-10:])    # Last 10 candles low
+        price_range = recent_high - recent_low
+        
+        # Dynamic buffer based on recent volatility
+        if price_range > 0:
+            dynamic_buffer = min(0.002, max(0.0005, price_range / recent_high * 0.5))  # 0.05% to 0.2% buffer
+            buffer = min(buffer, dynamic_buffer)
+        
+        # Debug logging
+        logger.debug(f"Breakout check - Close: {last_close}, Highs: {highs[:-1]}, Lows: {lows[:-1]}")
+        logger.debug(f"Volume - Last: {last_volume}, Avg: {avg_volume:.2f}, Buffer: {buffer*100:.4f}%")
+        
+        # Check for breakout with buffer and volume confirmation
+        resistance = max(highs[:-1]) * (1 + buffer)
+        support = min(lows[:-1]) * (1 - buffer)
+        
+        # Buy signal: Price breaks above resistance with volume confirmation
+        if last_close > resistance:
+            volume_ok = last_volume > avg_volume * 0.7  # Reduced volume threshold to 70%
+            if volume_ok:
+                # Check if candle closed in the upper half of its range
+                candle_range = ohlcv[-1][2] - ohlcv[-1][3]  # high - low
+                if candle_range > 0:
+                    close_ratio = (ohlcv[-1][4] - ohlcv[-1][3]) / candle_range  # (close - low) / range
+                    if close_ratio > 0.5:  # Closed in upper half of candle
+                        logger.info(f"BUY signal: {last_close} > {resistance:.8f} (resistance) with volume {last_volume:.2f} > {avg_volume*0.7:.2f}")
+                        return "buy", last_close
+        
+        # Sell signal: Price breaks below support with volume confirmation
+        elif last_close < support:
+            volume_ok = last_volume > avg_volume * 0.7  # Reduced volume threshold to 70%
+            if volume_ok:
+                # Check if candle closed in the lower half of its range
+                candle_range = ohlcv[-1][2] - ohlcv[-1][3]  # high - low
+                if candle_range > 0:
+                    close_ratio = (ohlcv[-1][2] - ohlcv[-1][4]) / candle_range  # (high - close) / range
+                    if close_ratio > 0.5:  # Closed in lower half of candle
+                        logger.info(f"SELL signal: {last_close} < {support:.8f} (support) with volume {last_volume:.2f} > {avg_volume*0.7:.2f}")
+                        return "sell", last_close
+        
+        # Check for strong momentum if no breakout
+        price_change = (last_close - prev_close) / prev_close
+        if abs(price_change) > buffer * 2:  # Strong move but not a breakout
+            if price_change > 0 and last_volume > avg_volume * 1.5:
+                logger.info(f"BUY signal: Strong momentum {price_change*100:.2f}% with volume {last_volume:.2f} > {avg_volume*1.5:.2f}")
+                return "buy", last_close
+            elif price_change < 0 and last_volume > avg_volume * 1.5:
+                logger.info(f"SELL signal: Strong momentum {price_change*100:.2f}% with volume {last_volume:.2f} > {avg_volume*1.5:.2f}")
+                return "sell", last_close
+        
+        # No signal
         return "hold", 0.0
         
-    highs = [c[2] for c in ohlcv[-(lookback+1):]]  # High prices
-    lows = [c[3] for c in ohlcv[-(lookback+1):]]    # Low prices
-    last = ohlcv[-1][4]                             # Last close price
-    
-    # Check for breakout with buffer
-    if last > max(highs[:-1]) * (1 + buffer):
-        return "buy", last
-    elif last < min(lows[:-1]) * (1 - buffer):
-        return "sell", last
-    
-    return "hold", last
+    except Exception as e:
+        logger.error(f"Error in breakout_signal: {e}", exc_info=True)
+        return "hold", 0.0
 
 def place_market_order(ex: ccxt.Exchange, symbol: str, side: str, amount: float) -> Dict[str, Any]:
     """

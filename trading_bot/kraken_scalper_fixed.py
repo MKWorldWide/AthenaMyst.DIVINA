@@ -15,9 +15,15 @@ import warnings
 from dataclasses import dataclass, asdict
 import json
 from dotenv import load_dotenv
+import os
+from discord_webhook import DiscordWebhook
 
 # Load environment variables
 load_dotenv()
+
+# Initialize Discord webhook if enabled
+DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL')
+discord_webhook = DiscordWebhook(DISCORD_WEBHOOK_URL) if DISCORD_WEBHOOK_URL else None
 
 # Configure logging with timezone awareness
 import logging.handlers
@@ -303,46 +309,65 @@ class KrakenScalper:
         return df.dropna()
     
     def _generate_signal(self, symbol: str, df: pd.DataFrame) -> Optional[TradeSignal]:
-        """Generate trading signal based on technical analysis with minimum 72% confidence."""
+        """Generate trading signal based on technical analysis with enhanced logging."""
         current = df.iloc[-1]
         prev = df.iloc[-2]
         
-        # Initialize confidence score (0-1 scale)
+        # Initialize confidence score (0-1 scale) and components
         confidence = 0.0
         signal = None
+        components = {}
         
-        # 1. Price relative to VWAP (30% weight)
+        # 1. Price relative to VWAP (25% weight)
         vwap_distance_pct = ((current['close'] - current['vwap']) / current['vwap']) * 100
+        vwap_score = min(1.0, max(0, abs(vwap_distance_pct) / 0.8))  # Full points at 0.8% distance
+        
         if current['close'] > current['vwap']:
-            confidence += 0.3 * min(1.0, max(0, vwap_distance_pct / 1.0))  # Full points if 1% above VWAP
+            confidence += 0.25 * vwap_score
+            components['vwap'] = f'above by {vwap_distance_pct:.2f}% (score: {vwap_score*100:.0f}%)'
         else:
             confidence += 0.0  # Below VWAP reduces confidence for buys
+            components['vwap'] = f'below by {abs(vwap_distance_pct):.2f}%'
         
-        # 2. RSI Score (30% weight)
-        if current['rsi'] < 30:  # Oversold
-            rsi_score = 1.0 - (current['rsi'] / 30.0)  # 1.0 at 0 RSI, 0 at 30 RSI
+        # 2. RSI Score (30% weight) - Adjusted for more signals
+        if current['rsi'] < 40:  # More lenient oversold
+            rsi_score = 1.0 - (current['rsi'] / 40.0)
             confidence += 0.3 * rsi_score
-        elif current['rsi'] > 70:  # Overbought (for shorting)
-            rsi_score = (current['rsi'] - 70.0) / 30.0  # 0 at 70 RSI, 1.0 at 100 RSI
+            components['rsi'] = f'oversold {current["rsi"]:.1f} (score: {rsi_score*100:.0f}%)'
+        elif current['rsi'] > 60:  # More lenient overbought
+            rsi_score = (current['rsi'] - 60.0) / 40.0
             confidence += 0.3 * rsi_score
+            components['rsi'] = f'overbought {current["rsi"]:.1f} (score: {rsi_score*100:.0f}%)'
+        else:
+            components['rsi'] = f'neutral {current["rsi"]:.1f}'
         
-        # 3. Volume Confirmation (20% weight)
-        volume_score = min(1.0, (current['volume_ratio'] - 0.8) / 0.4)  # 0.8-1.2x avg volume
+        # 3. Volume Confirmation (20% weight) - More lenient
+        volume_score = min(1.0, (current['volume_ratio'] - 0.7) / 0.6)  # 0.7-1.3x avg volume
         confidence += 0.2 * volume_score
+        components['volume'] = f'{current["volume_ratio"]:.2f}x avg (score: {volume_score*100:.0f}%)'
         
-        # 4. Recent Price Momentum (20% weight)
-        lookback = 3  # Last 3 candles
+        # 4. Recent Price Momentum (25% weight) - More sensitive
+        lookback = 2  # Shorter lookback
         if len(df) > lookback:
             returns = (df['close'].iloc[-1] / df['close'].iloc[-lookback-1]) - 1
-            momentum_score = min(1.0, abs(returns) / 0.01)  # 1% move = full points
-            confidence += 0.2 * momentum_score
+            momentum_score = min(1.0, abs(returns) / 0.008)  # 0.8% move = full points
+            confidence += 0.25 * momentum_score
+            components['momentum'] = f'{returns*100:.2f}% (score: {momentum_score*100:.0f}%)'
         
-        # Determine signal direction if confidence is high enough
-        if confidence >= 0.72:  # 72% minimum confidence
-            if current['rsi'] < 35 and current['close'] > current['vwap']:
+        # Determine signal direction with adjusted thresholds
+        if confidence >= 0.65:  # Lowered from 72%
+            if current['rsi'] < 45 and current['close'] > current['vwap'] and current['volume_ratio'] > 0.8:
                 signal = 'buy'
-            elif current['rsi'] > 65 and current['close'] < current['vwap']:
+            elif current['rsi'] > 55 and current['close'] < current['vwap'] and current['volume_ratio'] > 0.8:
                 signal = 'sell'
+        
+        # Enhanced logging
+        if signal:
+            logger.info(f"🔍 {symbol} {signal.upper()} signal | Confidence: {confidence*100:.1f}% | "
+                      f"Price: {current['close']:.6f} | {', '.join(f'{k}: {v}' for k, v in components.items())}")
+        elif confidence > 0.5:  # Log near-misses for debugging
+            logger.debug(f"❌ {symbol} No signal | Confidence: {confidence*100:.1f}% | "
+                       f"Price: {current['close']:.6f} | {', '.join(f'{k}: {v}' for k, v in components.items())}")
         
         if not signal:
             return None
@@ -369,6 +394,36 @@ class KrakenScalper:
             }
         )
     
+    def _send_trade_notification(self, symbol: str, side: str, entry_price: float, 
+                              stop_loss: float, take_profit: float, amount: float):
+        """Send trade notification to Discord."""
+        if not discord_webhook:
+            return
+            
+        try:
+            # Format the message for Discord
+            direction_emoji = "🟢" if side.lower() == 'buy' else "🔴"
+            symbol_display = symbol.replace('/', '')
+            
+            # Create a clean, readable message
+            message = (
+                f"## {direction_emoji} {side.upper()} {symbol_display} {direction_emoji}\n"
+                f"**Entry Price**: ${entry_price:.8f}\n"
+                f"**Amount**: {amount:.8f} {symbol.split('/')[0]}\n"
+                f"**Stop Loss**: ${stop_loss:.8f}\n"
+                f"**Take Profit**: ${take_profit:.8f}\n"
+                f"**Risk/Reward**: 1:{(take_profit/entry_price - 1)/(1 - stop_loss/entry_price):.1f}"
+            )
+            
+            # Send the notification
+            discord_webhook.send_status_update(
+                message=message,
+                color=0x00ff00 if side.lower() == 'buy' else 0xff0000
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to send Discord notification: {e}")
+    
     def execute_trade(self, signal: TradeSignal):
         """Execute a trade based on the signal."""
         try:
@@ -379,7 +434,12 @@ class KrakenScalper:
             # Calculate position size
             position_size = self._calculate_position_size(signal)
             if position_size <= 0:
+                logger.warning(f"Insufficient balance or invalid position size for {signal.symbol}")
                 return
+            
+            # Calculate stop loss and take profit
+            stop_loss = self._calculate_stop_loss(signal)
+            take_profit = self._calculate_take_profit(signal)
                 
             # Place order
             order = self.exchange.create_market_order(
@@ -390,21 +450,33 @@ class KrakenScalper:
             
             if order and order.get('status') == 'closed':
                 # Record the trade
-                self.open_trades[signal.symbol] = {
+                trade_info = {
                     'side': signal.side,
                     'amount': position_size,
                     'entry_price': signal.price,
                     'entry_time': time.time(),
-                    'stop_loss': self._calculate_stop_loss(signal),
-                    'take_profit': self._calculate_take_profit(signal),
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
                     'trailing_stop': self.config['enable_trailing_stop'],
                     'highest_price': signal.price if signal.side == 'buy' else float('inf'),
                     'lowest_price': signal.price if signal.side == 'sell' else 0
                 }
+                self.open_trades[signal.symbol] = trade_info
                 
+                # Log the trade
                 logger.info(
                     f"Executed {signal.side.upper()} {position_size:.8f} {signal.symbol} "
                     f"@ {signal.price:.8f}"
+                )
+                
+                # Send Discord notification
+                self._send_trade_notification(
+                    symbol=signal.symbol,
+                    side=signal.side,
+                    entry_price=signal.price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    amount=position_size
                 )
                 
                 # Update metrics
@@ -412,7 +484,10 @@ class KrakenScalper:
                 self.metrics['last_trade_time'] = time.time()
                 
         except Exception as e:
-            logger.error(f"Error executing trade for {signal.symbol}: {e}")
+            error_msg = f"Error executing trade for {signal.symbol}: {str(e)}"
+            logger.error(error_msg)
+            if discord_webhook:
+                discord_webhook.send_error(error_msg)
     
     def _calculate_position_size(self, signal: TradeSignal) -> float:
         """Calculate position size based on risk parameters."""
@@ -523,13 +598,53 @@ class KrakenScalper:
         except Exception as e:
             logger.error(f"Error monitoring position {symbol}: {e}")
     
+    def _send_exit_notification(self, symbol: str, position: Dict, exit_price: float, 
+                              reason: str, pnl: float, pnl_percent: float):
+        """Send trade exit notification to Discord."""
+        if not discord_webhook:
+            return
+            
+        try:
+            # Format the message for Discord
+            direction_emoji = "🟢" if pnl >= 0 else "🔴"
+            symbol_display = symbol.replace('/', '')
+            
+            # Format reason for display
+            reason_display = {
+                'take_profit': 'Take Profit',
+                'stop_loss': 'Stop Loss',
+                'trailing_stop': 'Trailing Stop',
+                'timeout': 'Time Limit',
+                'manual': 'Manual Close'
+            }.get(reason, reason.title())
+            
+            # Create a clean, readable message
+            message = (
+                f"## {direction_emoji} CLOSED {symbol_display} {direction_emoji}\n"
+                f"**Side**: {position['side'].upper()}\n"
+                f"**Entry Price**: ${position['entry_price']:.8f}\n"
+                f"**Exit Price**: ${exit_price:.8f}\n"
+                f"**Amount**: {position['amount']:.8f} {symbol.split('/')[0]}\n"
+                f"**P&L**: ${abs(pnl):.8f} ({abs(pnl_percent):.2f}%)\n"
+                f"**Reason**: {reason_display}"
+            )
+            
+            # Send the notification
+            discord_webhook.send_trade_closed(
+                pair=symbol,
+                pnl=pnl,
+                pnl_percent=pnl_percent,
+                reason=reason_display
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to send Discord exit notification: {e}")
+    
     def _exit_position(self, symbol: str, position: Dict, exit_price: float, reason: str):
         """Exit a position."""
         try:
-            # Determine exit side (opposite of entry)
+            # Place the exit order (opposite of entry)
             exit_side = 'sell' if position['side'] == 'buy' else 'buy'
-            
-            # Place exit order
             order = self.exchange.create_market_order(
                 symbol=symbol,
                 side=exit_side,
@@ -537,30 +652,46 @@ class KrakenScalper:
             )
             
             if order and order.get('status') == 'closed':
-                # Calculate PnL
+                # Calculate P&L
                 entry_price = position['entry_price']
                 if position['side'] == 'buy':
-                    pnl_pct = (exit_price - entry_price) / entry_price * 100
+                    pnl = (exit_price - entry_price) * position['amount']
                 else:  # sell/short
-                    pnl_pct = (entry_price - exit_price) / entry_price * 100
+                    pnl = (entry_price - exit_price) * position['amount']
+                
+                pnl_percent = (pnl / (entry_price * position['amount'])) * 100
                 
                 # Update metrics
-                self.metrics['pnl'] += pnl_pct
-                if pnl_pct > 0:
+                self.metrics['pnl'] += pnl
+                if pnl >= 0:
                     self.metrics['wins'] += 1
                 else:
                     self.metrics['losses'] += 1
                 
+                # Log the exit
                 logger.info(
-                    f"Exited {position['side'].upper()} {position['amount']:.8f} {symbol} @ {exit_price:.8f} "
-                    f"(P&L: {pnl_pct:.2f}%, Reason: {reason})"
+                    f"Closed {position['side'].upper()} {position['amount']:.8f} {symbol} @ {exit_price:.8f} "
+                    f"(P&L: {pnl:.8f} {symbol.split('/')[1]}, {pnl_percent:.2f}%) - {reason}"
                 )
                 
-                # Remove from open trades
-                self.open_trades.pop(symbol, None)
+                # Send Discord notification
+                self._send_exit_notification(
+                    symbol=symbol,
+                    position=position,
+                    exit_price=exit_price,
+                    reason=reason,
+                    pnl=pnl,
+                    pnl_percent=pnl_percent
+                )
                 
         except Exception as e:
-            logger.error(f"Error exiting position {symbol}: {e}")
+            error_msg = f"Error exiting position {symbol}: {str(e)}"
+            logger.error(error_msg)
+            if discord_webhook:
+                discord_webhook.send_error(error_msg)
+        finally:
+            # Ensure the position is removed from open_trades even if there's an error
+            self.open_trades.pop(symbol, None)
     
     def close_all_positions(self):
         """Close all open positions."""
