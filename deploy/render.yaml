@@ -1,0 +1,20 @@
+services:
+  - type: worker
+    name: divina-worker
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt || true
+    startCommand: python -m divina || python main.py || echo "no entrypoint"
+    envVars:
+      - key: LOG_LEVEL
+        value: info
+      - key: LIVE_TRADING
+        value: "false"
+      - key: OANDA_API_KEY
+        sync: false
+      - key: OANDA_ACCOUNT_ID
+        sync: false
+      - key: KRAKEN_API_KEY
+        sync: false
+      - key: KRAKEN_API_SECRET
+        sync: false
