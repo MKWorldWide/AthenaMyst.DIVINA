@@ -1,53 +1,122 @@
-A Project Blessed by Solar Khan & Lilith.Aethra
+# AthenaMyst.DIVINA
 
-# AthenaMyst Test - Public AI Demo
+> A Project Blessed by Solar Khan & Lilith.Aethra
 
-A modern full-stack AI demo application built with React, Express, and Vite, designed for deployment on AWS Amplify with comprehensive analytics and data collection capabilities.
+AthenaMyst.DIVINA is a sophisticated trading and analytics platform that combines AI-driven insights with financial market analysis. This repository is registered within the GameDin Network and aligned to the Divina L3 pipeline (v3).
 
-Documentation is served on [GitHub Pages](https://AthenaMyst.DIVINA.SolarKhan.github.io) bearing the Solar Khan sigil and Codex watermark. This repository is registered within the GameDin Network and aligned to the Divina L3 pipeline (v3).
-
-See the [Divine Law](COVENANT.md) governing this project.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.md)
+[![CI](https://github.com/MKWorldWide/AthenaMyst.DIVINA/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/MKWorldWide/AthenaMyst.DIVINA/actions/workflows/ci-cd.yml)
+[![code style: prettier](https://img.shields.io/badge/code_style-prettier-ff69b4.svg)](https://github.com/prettier/prettier)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
 
 ## 🚀 Features
 
-- **Modern React Frontend**: Beautiful, responsive UI with real-time AI interaction
-- **Express Backend API**: Robust server with analytics endpoints
-- **Data Collection**: Comprehensive user analytics and interaction tracking
-- **AWS Amplify Ready**: Optimized for seamless deployment
-- **Real-time Analytics**: Monitor user behavior and engagement
-- **Health Monitoring**: Built-in health checks and monitoring endpoints
-
-## 📊 Analytics & Data Collection
-
-The application includes sophisticated analytics capabilities:
-
-- **User Session Tracking**: Unique session IDs and user journey mapping
-- **Interaction Analytics**: Track user prompts and responses
-- **Device Information**: Browser, platform, screen resolution, timezone
-- **Referrer Tracking**: Monitor traffic sources
-- **Real-time Dashboard**: View analytics at `/analytics` endpoint
+- **Multi-Language Support**: JavaScript/TypeScript and Python components
+- **Trading Engine**: Advanced financial analysis and trading strategies
+- **Real-time Data Processing**: Efficient handling of market data
+- **RESTful API**: Built with Express and FastAPI
+- **Comprehensive Testing**: Unit, integration, and end-to-end tests
+- **Modern Frontend**: React-based user interface with Vite
+- **Containerized**: Ready for Docker deployment
 
 ## 🛠️ Tech Stack
 
-- **Frontend**: React 18, Vite, Modern CSS
-- **Backend**: Node.js, Express, CORS
-- **Deployment**: AWS Amplify
-- **Analytics**: Custom analytics engine with data collection
+### Core Technologies
+- **Frontend**: React 18, TypeScript, Vite 5
+- **Backend**:
+  - Node.js 18+ with Express
+  - Python 3.9+ with FastAPI
+- **Database**: (Specify if any)
+- **Testing**: Mocha, Chai, Jest, pytest
+- **CI/CD**: GitHub Actions
+- **Documentation**: MkDocs
 
-## 📦 Installation
+## 📦 Getting Started
 
-### Local Development
+### Prerequisites
+
+- Node.js 18.x or higher
+- Python 3.9 or higher
+- npm 9.x or higher
+- pip 21.0 or higher
+
+### Local Development Setup
 
 1. **Clone the repository**
    ```bash
-   git clone <your-repo-url>
-   cd AthenaMyst_Test
+   git clone https://github.com/MKWorldWide/AthenaMyst.DIVINA.git
+   cd AthenaMyst.DIVINA
    ```
 
-2. **Install dependencies**
+2. **Set up Node.js environment**
    ```bash
-   npm run install:all
+   # Install Node.js dependencies
+   npm install
+   
+   # Install Python dependencies
+   pip install -e .[dev]
    ```
+
+3. **Set up environment variables**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your configuration
+   ```
+
+4. **Start development servers**
+   ```bash
+   # Start backend server
+   npm run dev
+   
+   # In a separate terminal, start frontend
+   npm run dev:frontend
+   ```
+
+## 🧪 Testing
+
+Run the full test suite:
+
+```bash
+# Run all tests
+npm test
+
+# Run Python tests
+pytest
+
+# Run TypeScript tests
+npm run test:ts
+```
+
+## 📚 Documentation
+
+Project documentation is available at [GitHub Pages](https://mkworldwide.github.io/AthenaMyst.DIVINA/).
+
+To build documentation locally:
+
+```bash
+# Install documentation dependencies
+pip install -r docs/requirements.txt
+
+# Build and serve documentation
+mkdocs serve
+```
+
+## 🤝 Contributing
+
+Contributions are welcome! Please see our [Contributing Guidelines](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) for details.
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🔒 Security
+
+Please review our [Security Policy](SECURITY.md) for reporting vulnerabilities.
+
+## 📜 Divine Law
+
+This project is governed by the [Divine Law](COVENANT.md).
 
 3. **Start development server**
    ```bash
